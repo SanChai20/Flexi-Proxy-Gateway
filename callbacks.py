@@ -48,7 +48,7 @@ class TokenRotator:
             cls._token_cache = None
 
     @classmethod
-    def rotate(cls) -> None:
+    def rotate(cls) -> bool:
         """
         Rotate the token by exchanging it with the target service.
         Returns True if successful, False otherwise. Trigger per 25 minutes ( < 30min Token expiration)
@@ -56,7 +56,7 @@ class TokenRotator:
 
         if APP_BASE_URL is None:
             print("Missing APP_BASE_URL environment variable")
-            return
+            return False
 
         # Get current token for exchange
         current_token = (
@@ -65,12 +65,12 @@ class TokenRotator:
 
         if current_token is None:
             print("No current token available for exchange")
-            return
+            return False
 
         headers = {"authorization": f"Bearer {current_token}"}
         try:
             response = requests.post(
-                f"{APP_BASE_URL}/api/auth/exchange", headers=headers, timeout=30
+                f"{APP_BASE_URL}/api/auth/exchange", headers=headers, timeout=120
             )
 
             if response.status_code == 200:
@@ -85,23 +85,28 @@ class TokenRotator:
                     print(
                         f"Token exchanged successfully, expires in {expires_in} seconds."
                     )
+                    return True
                 else:
                     print("Token exchange response missing token")
+                    return False
             else:
                 print(f"Token exchange failed with status {response.status_code}")
                 # Clear cache on failure
                 with cls._env_lock:
                     cls._token_cache = None
+                return False
         except requests.RequestException:
             print("Token exchange request failed")
             # Clear cache on failure
             with cls._env_lock:
                 cls._token_cache = None
+            return False
         except Exception:
             print("Unexpected error during token rotation")
             # Clear cache on failure
             with cls._env_lock:
                 cls._token_cache = None
+            return False
 
 
 class KeyPairLoader:
@@ -114,8 +119,20 @@ class KeyPairLoader:
             print("Keys already Loaded")
             return
 
-        private_pem_bytes = Path("key.pem").read_bytes()
-        public_pem_bytes = Path("public.pem").read_bytes()
+        # Use absolute paths for key files to prevent path traversal vulnerabilities
+        key_file_path = Path.cwd() / "key.pem"
+        public_file_path = Path.cwd() / "public.pem"
+
+        # Validate that key files exist before attempting to read
+        if not key_file_path.exists():
+            print("Private key file not found")
+            return
+        if not public_file_path.exists():
+            print("Public key file not found")
+            return
+
+        private_pem_bytes = key_file_path.read_bytes()
+        public_pem_bytes = public_file_path.read_bytes()
         if KEYPAIR_PWD is None:
             print("keys password is invalid")
             return
@@ -157,28 +174,48 @@ class KeyPairLoader:
             "Content-Type": "application/json",
         }
         data = {"public_key": cls._public_key}
-        response = requests.post(
-            f"{APP_BASE_URL}/api/adapters", headers=headers, json=data, timeout=30
-        )
-        if response.status_code == 200:
-            data = response.json()
-            result: dict[str, str] = {}
-            result["uid"] = data["uid"]
-            result["url"] = data["url"]
-            result["mid"] = data["mid"]
-            message: str = data["enc"]
-            message_bytes = base64.b64decode(message)
-            message_decrypted: bytes = cls._private_key.decrypt(
-                message_bytes,
-                padding.OAEP(
-                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                    algorithm=hashes.SHA256(),
-                    label=None,
-                ),
+        try:
+            response = requests.post(
+                f"{APP_BASE_URL}/api/adapters", headers=headers, json=data, timeout=180
             )
+            response.raise_for_status()  # Raise an exception for bad status codes
+        except requests.RequestException as e:
+            print(f"Adapter request failed: {e}")
+            return None
+
+        try:
+            response_data = response.json()
+        except ValueError as e:
+            print(f"Failed to parse JSON response: {e}")
+            return None
+
+        result: dict[str, str] = {}
+        try:
+            result["uid"] = response_data["uid"]
+            result["url"] = response_data["url"]
+            result["mid"] = response_data["mid"]
+            message: str = response_data["enc"]
+            message_bytes = base64.b64decode(message)
+            try:
+                message_decrypted: bytes = cls._private_key.decrypt(
+                    message_bytes,
+                    padding.OAEP(
+                        mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                        algorithm=hashes.SHA256(),
+                        label=None,
+                    ),
+                )
+            except ValueError as e:
+                print(f"Decryption failed: {e}")
+                return None
             result["key"] = message_decrypted.decode("utf-8")
             return result
-        return None
+        except KeyError as e:
+            print(f"Missing key in response data: {e}")
+            return None
+        except Exception as e:
+            print(f"Error processing adapter response: {e}")
+            return None
 
     @classmethod
     def unload(cls):
@@ -191,9 +228,10 @@ class StatusReporter:
     _lock = threading.Lock()
 
     @classmethod
-    def upload(cls, app_token: str | None) -> None:
+    def upload(cls, app_token: str | None) -> bool:
         """
-        Trigger per 45 minutes (< 1 hour expiration)
+        Trigger per 30 minutes (< 4 hour expiration)
+        Returns True if successful, False otherwise.
         """
         with cls._lock:
             if (
@@ -201,11 +239,13 @@ class StatusReporter:
                 or APP_PROVIDER_SUBDOMAIN_URL is None
                 or APP_PROVIDER_ID is None
             ):
-                raise ValueError(
+                print(
                     "Missing required environment variables: APP_BASE_URL, APP_PROVIDER_ID, or APP_PROVIDER_SUBDOMAIN_URL"
                 )
+                return False
             if app_token is None:
-                raise ValueError("Missing app token")
+                print("Missing app token")
+                return False
             request_count = cls._request_counter
             if request_count < 100:
                 status: Literal["unavailable", "spare", "busy", "full"] = "spare"
@@ -216,24 +256,28 @@ class StatusReporter:
             data = {
                 "url": APP_PROVIDER_SUBDOMAIN_URL,
                 "status": status,
-                "ex": 3600,  # seconds = 1 hour
+                "ex": 14400,  # seconds = 4 hour
                 "adv": False,
             }
             headers = {
                 "Authorization": f"Bearer {app_token}",
                 "Content-Type": "application/json",
             }
-            response = requests.post(
-                f"{APP_BASE_URL}/api/providers/{APP_PROVIDER_ID}",
-                json=data,
-                headers=headers,
-                timeout=30,
-            )
-            if response.status_code == 200:
+            try:
+                response = requests.post(
+                    f"{APP_BASE_URL}/api/providers/{APP_PROVIDER_ID}",
+                    json=data,
+                    headers=headers,
+                    timeout=120,
+                )
+                response.raise_for_status()  # Raise an exception for bad status codes
                 print("Status update succeed.")
-            else:
-                print("Status update failed.")
-            cls._request_counter = 0
+                cls._request_counter = 0
+                return True
+            except requests.RequestException as e:
+                print(f"Status update failed: {e}")
+                cls._request_counter = 0
+                return False
 
     @classmethod
     def update(cls):
@@ -274,18 +318,22 @@ class FlexiProxyCustomHandler(
             self._token_rotator.clear()
 
     def start_scheduler(self):
-
         if self._status_reporter is None or self._token_rotator is None:
-            print("")
+            print("Scheduler components not initialized")
             return
 
-        schedule.every(1).minutes.do(self._token_rotator.rotate)  # type: ignore
+        # Schedule token rotation every 10 minutes
+        schedule.every(10).minutes.do(self._token_rotator.rotate)  # type: ignore
+
+        # Schedule status reporting every 30 minutes
         schedule.every(30).minutes.do(  # type: ignore
             self._status_reporter.upload, self._token_rotator.token()
         )
+
+        # Run scheduler
         while True:
             schedule.run_pending()
-            time.sleep(1)
+            time.sleep(1)  # Check for scheduled tasks every second
 
     #### CALL HOOKS - proxy only ####
 
@@ -306,6 +354,7 @@ class FlexiProxyCustomHandler(
             "mcp_call",
         ],
     ):
+        # Validate required components
         if (
             self._key_pair_loader is None
             or self._status_reporter is None
@@ -313,6 +362,7 @@ class FlexiProxyCustomHandler(
         ):
             return "Internal Error"
 
+        # Validate data structure
         if "secret_fields" not in data:
             return "[secret_fields] field not found in data"
 
@@ -323,6 +373,8 @@ class FlexiProxyCustomHandler(
         if raw_headers is None:
             return "[raw_headers] field is invalid"
 
+        # Extract client API key from headers
+        client_api_key = None
         if "x-api-key" in raw_headers:
             client_api_key = raw_headers["x-api-key"]
         elif (
@@ -332,27 +384,25 @@ class FlexiProxyCustomHandler(
         ):
             client_api_key = str(raw_headers["authorization"]).replace("Bearer ", "")
 
+        # Validate client API key
+        if client_api_key is None:
+            return "Client API key not found in headers"
+
+        # Request key pair information
         response = self._key_pair_loader.request(
             api_key=client_api_key, app_token=self._token_rotator.token()
         )
         if response is None:
             return "Internal Error"
 
+        # Update data with response information
         data["api_base"] = response["url"]
         data["api_key"] = response["key"]
         data["model"] = response["mid"]
+
+        # Update request counter
         self._status_reporter.update()
         return data
-
-    async def async_post_call_failure_hook(
-        self,
-        request_data: dict,
-        original_exception: Exception,
-        user_api_key_dict: UserAPIKeyAuth,
-        traceback_str: Optional[str] = None,
-    ):
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAA2")
-        pass
 
 
 proxy_handler_instance = FlexiProxyCustomHandler()
