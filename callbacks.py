@@ -3,7 +3,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, AsyncGenerator, Literal, Optional
+from typing import Literal, Optional
 
 import requests
 import schedule
@@ -13,7 +13,6 @@ from dotenv import load_dotenv
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.types.utils import ModelResponseStream
 
 load_dotenv()
 
