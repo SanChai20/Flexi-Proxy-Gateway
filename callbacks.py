@@ -279,7 +279,7 @@ class FlexiProxyCustomHandler(
             print("")
             return
 
-        schedule.every(25).minutes.do(self._token_rotator.rotate)  # type: ignore
+        schedule.every(1).minutes.do(self._token_rotator.rotate)  # type: ignore
         schedule.every(30).minutes.do(  # type: ignore
             self._status_reporter.upload, self._token_rotator.token()
         )
@@ -311,22 +311,17 @@ class FlexiProxyCustomHandler(
             or self._status_reporter is None
             or self._token_rotator is None
         ):
-            print("Not init")
-            return None
+            return "Internal Error"
 
         if "secret_fields" not in data:
-            print("secret_fields field not found in data")
-            return None
+            return "[secret_fields] field not found in data"
 
         if "raw_headers" not in data["secret_fields"]:
-            print('raw_headers field not found in data["secret_fields"]')
-            return None
+            return '[raw_headers] field not found in data["secret_fields"]'
 
         raw_headers: dict | None = data["secret_fields"]["raw_headers"]
-
         if raw_headers is None:
-            print('raw_headers field not found in data["secret_fields"]["raw_headers"]')
-            return None
+            return "[raw_headers] field is invalid"
 
         if "x-api-key" in raw_headers:
             client_api_key = raw_headers["x-api-key"]
@@ -341,7 +336,7 @@ class FlexiProxyCustomHandler(
             api_key=client_api_key, app_token=self._token_rotator.token()
         )
         if response is None:
-            return None
+            return "Internal Error"
 
         data["api_base"] = response["url"]
         data["api_key"] = response["key"]
@@ -358,54 +353,6 @@ class FlexiProxyCustomHandler(
     ):
         print("AAAAAAAAAAAAAAAAAAAAAAAAAA2")
         pass
-
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response,
-    ):
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAA3")
-        pass
-
-    async def async_moderation_hook(  # call made in parallel to llm api call
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[
-            "completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "responses",
-            "mcp_call",
-        ],
-    ):
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAA4")
-        pass
-
-    async def async_post_call_streaming_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: str,
-    ):
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAA5")
-        pass
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
-        """
-        Passes the entire stream to the guardrail
-
-        This is useful for plugins that need to see the entire stream.
-        """
-        async for item in response:
-            yield item
 
 
 proxy_handler_instance = FlexiProxyCustomHandler()

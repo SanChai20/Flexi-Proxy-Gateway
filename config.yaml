@@ -5,4 +5,5 @@ model_list:
       custom_llm_provider: openai
 
 litellm_settings:
+  drop_params: True
   callbacks: callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
