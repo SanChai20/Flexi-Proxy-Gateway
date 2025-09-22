@@ -51,7 +51,7 @@ class TokenRotator:
     def rotate(cls) -> bool:
         """
         Rotate the token by exchanging it with the target service.
-        Returns True if successful, False otherwise. Trigger per 25 minutes ( < 30min Token expiration)
+        Returns True if successful, False otherwise. Trigger per 10 minutes ( < 2h Token expiration)
         """
 
         if APP_BASE_URL is None:
