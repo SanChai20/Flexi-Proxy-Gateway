@@ -14,13 +14,19 @@ from litellm.types.utils import ModelResponseStream
 
 load_dotenv()
 
+APP_TOKEN_PASS = os.getenv("APP_TOKEN_PASS", None)
+APP_BASE_URL = os.getenv("APP_BASE_URL", None)
+APP_PROVIDER_SUBDOMAIN_URL = os.getenv("APP_PROVIDER_SUBDOMAIN_URL", None)
+APP_PROVIDER_ID = os.getenv("APP_PROVIDER_ID", None)
+KEYPAIR_PWD = os.getenv("KEYPAIR_PWD", None)
+
 
 class TokenRotator:
     _env_lock = threading.Lock()
     _token_cache: Optional[str] = None
 
     @classmethod
-    def token(cls) -> str:
+    def token(cls) -> str | None:
         """
         Get the current token from cache or environment.
         """
@@ -28,7 +34,7 @@ class TokenRotator:
             if cls._token_cache is not None:
                 return cls._token_cache
             else:
-                return os.getenv("TOKEN_PASS", "")
+                return APP_TOKEN_PASS
 
     @classmethod
     def clear(cls) -> None:
@@ -44,16 +50,14 @@ class TokenRotator:
         Rotate the token by exchanging it with the target service.
         Returns True if successful, False otherwise. Trigger per 25 minutes ( < 30min Token expiration)
         """
-        target_url = os.getenv("TARGET_URL")
-        if not target_url:
-            print("Missing TARGET_URL environment variable")
+
+        if not APP_BASE_URL:
+            print("Missing APP_BASE_URL environment variable")
             return
 
         # Get current token for exchange
         current_token = (
-            cls._token_cache
-            if cls._token_cache is not None
-            else os.getenv("TOKEN_PASS", "")
+            cls._token_cache if cls._token_cache is not None else APP_TOKEN_PASS
         )
 
         if not current_token:
@@ -63,7 +67,7 @@ class TokenRotator:
         headers = {"authorization": f"Bearer {current_token}"}
         try:
             response = requests.post(
-                f"{target_url}/api/auth/exchange", headers=headers, timeout=30
+                f"{APP_BASE_URL}/api/auth/exchange", headers=headers, timeout=30
             )
 
             if response.status_code == 200:
@@ -109,7 +113,10 @@ class KeyPairLoader:
 
         private_pem_bytes = Path("key.pem").read_bytes()
         public_pem_bytes = Path("public.pem").read_bytes()
-        password = os.getenv("KEYPAIR_PWD", "").encode("ascii")
+        if not KEYPAIR_PWD:
+            print("keys password is invalid")
+            return
+        password = KEYPAIR_PWD.encode("ascii")
 
         try:
             private_key = serialization.load_pem_private_key(
@@ -129,21 +136,20 @@ class KeyPairLoader:
             print("Incorrect Password")
 
     @classmethod
-    def request(cls, api_key: str, token_pass: str) -> None | dict:
-        target_url = os.getenv("TARGET_URL")
-        if not target_url:
-            print("Missing TARGET_URL environment variable")
+    def request(cls, api_key: str, app_token: str) -> None | dict:
+        if not APP_BASE_URL:
+            print("Missing APP_BASE_URL environment variable")
             return None
         if cls._public_key is None or cls._private_key is None:
             print("Keys not Loaded")
             return None
         headers = {
-            "authorization": f"Bearer {token_pass}",
+            "authorization": f"Bearer {app_token}",
             "X-Public-Key": cls._public_key,
             "X-API-Key": api_key,
         }
         response = requests.get(
-            f"{target_url}/api/adapters", headers=headers, timeout=30
+            f"{APP_BASE_URL}/api/adapters", headers=headers, timeout=30
         )
         if response.status_code == 200:
             data = response.json()
@@ -168,6 +174,62 @@ class KeyPairLoader:
     def unload(cls):
         cls._private_key = None
         cls._public_key = None
+
+
+class StatusReporter:
+    _request_counter: int = 0
+    _lock = threading.Lock()
+
+    @classmethod
+    def upload(cls, app_token: str) -> None:
+        """
+        Trigger per 45 minutes (< 1 hour expiration)
+        """
+        with cls._lock:
+            if (
+                not APP_BASE_URL
+                or not APP_PROVIDER_SUBDOMAIN_URL
+                or not APP_PROVIDER_ID
+            ):
+                raise ValueError(
+                    "Missing required environment variables: TARGET_URL, PROVIDER_ID, or SUBDOMAIN_URL"
+                )
+            request_count = cls._request_counter
+            if request_count < 100:
+                status: Literal["unavailable", "spare", "busy", "full"] = "spare"
+            elif request_count < 500:
+                status = "busy"
+            else:
+                status = "full"
+            data = {
+                "url": APP_PROVIDER_SUBDOMAIN_URL,
+                "status": status,
+                "ex": 3600,  # seconds = 1 hour
+                "adv": False,
+            }
+            headers = {
+                "authorization": f"Bearer {app_token}",
+                "accept": "application/json",
+            }
+            response = requests.post(
+                f"{APP_BASE_URL}/api/providers/{APP_PROVIDER_ID}",
+                json=data,
+                headers=headers,
+                timeout=30,
+            )
+            if response.status_code == 200:
+                print("Status update succeed.")
+            else:
+                print("Status update failed.")
+            cls._request_counter = 0
+
+    @classmethod
+    def update(cls):
+        """
+        Trigger per request
+        """
+        with cls._lock:
+            cls._request_counter = cls._request_counter + 1
 
 
 # This file includes the custom callbacks for LiteLLM Proxy

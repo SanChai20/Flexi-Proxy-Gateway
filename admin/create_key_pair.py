@@ -7,6 +7,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+KEYPAIR_PWD = os.getenv("KEYPAIR_PWD", None)
+
 
 def generate_key_pair():
     key_size = 8192  # Should be at least 2048
@@ -16,13 +18,12 @@ def generate_key_pair():
         key_size=key_size,
     )
 
-    raw_password = os.getenv("KEYPAIR_PWD", "")
-    if raw_password == "":
-        print("Password is invalid.")
+    if KEYPAIR_PWD is None:
+        print("[KEYPAIR_PWD] is none.")
         return
 
     public_key = private_key.public_key()
-    password = raw_password.encode("ascii")
+    password = KEYPAIR_PWD.encode("ascii")
 
     key_pem_bytes = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,  # PEM Format is specified
