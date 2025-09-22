@@ -1,3 +1,4 @@
+import base64
 import os
 import threading
 import time
@@ -152,11 +153,12 @@ class KeyPairLoader:
             return None
         headers = {
             "authorization": f"Bearer {app_token}",
-            "X-Public-Key": cls._public_key,
             "X-API-Key": api_key,
+            "Content-Type": "application/json",
         }
-        response = requests.get(
-            f"{APP_BASE_URL}/api/adapters", headers=headers, timeout=30
+        data = {"public_key": cls._public_key}
+        response = requests.post(
+            f"{APP_BASE_URL}/api/adapters", headers=headers, json=data, timeout=30
         )
         if response.status_code == 200:
             data = response.json()
@@ -165,8 +167,9 @@ class KeyPairLoader:
             result["url"] = data["url"]
             result["mid"] = data["mid"]
             message: str = data["enc"]
+            message_bytes = base64.b64decode(message)
             message_decrypted: bytes = cls._private_key.decrypt(
-                message.encode(),
+                message_bytes,
                 padding.OAEP(
                     mgf=padding.MGF1(algorithm=hashes.SHA256()),
                     algorithm=hashes.SHA256(),
@@ -340,6 +343,9 @@ class FlexiProxyCustomHandler(
         if response is None:
             return None
 
+        data["api_base"] = response["url"]
+        data["api_key"] = response["key"]
+        data["model"] = response["mid"]
         self._status_reporter.update()
         return data
 

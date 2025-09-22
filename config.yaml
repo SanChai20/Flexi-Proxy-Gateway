@@ -1,2 +1,8 @@
+model_list:
+  - model_name: "*" 
+    litellm_params:
+      model: "*"
+      custom_llm_provider: openai
+
 litellm_settings:
   callbacks: callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
