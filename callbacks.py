@@ -1,17 +1,19 @@
 import os
-from pathlib import Path
 import threading
+from pathlib import Path
+from typing import Any, AsyncGenerator, Literal, Optional
+
 import requests
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.caching.dual_cache import DualCache
-from litellm.types.utils import ModelResponseStream
-from typing import Any, AsyncGenerator, Optional, Literal
-from dotenv import load_dotenv
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from dotenv import load_dotenv
+from litellm.caching.dual_cache import DualCache
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.proxy_server import UserAPIKeyAuth
+from litellm.types.utils import ModelResponseStream
 
 load_dotenv()
+
 
 class TokenRotator:
     _env_lock = threading.Lock()
@@ -170,18 +172,25 @@ class KeyPairLoader:
 
 # This file includes the custom callbacks for LiteLLM Proxy
 # Once defined, these can be passed in proxy_config.yaml
-class FlexiProxyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+class FlexiProxyCustomHandler(
+    CustomLogger
+):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(self):
-        self._key_pair_loader = KeyPairLoader()
-        self._key_pair_loader.unload()
-        self._key_pair_loader.load()
-        self._token_rotator_instance = TokenRotator()
+        # self._key_pair_loader = KeyPairLoader()
+        # self._key_pair_loader.unload()
+        # self._key_pair_loader.load()
+        # self._token_rotator_instance = TokenRotator()
         pass
 
-    #### CALL HOOKS - proxy only #### 
+    #### CALL HOOKS - proxy only ####
 
-    async def async_pre_call_hook(self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: dict, call_type: Literal[
+    async def async_pre_call_hook(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        cache: DualCache,
+        data: dict,
+        call_type: Literal[
             "completion",
             "text_completion",
             "embeddings",
@@ -191,15 +200,16 @@ class FlexiProxyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
             "pass_through_endpoint",
             "rerank",
             "mcp_call",
-        ]): 
+        ],
+    ):
         print("AAAAAAAAAAAAAAAAAAAAAAAAAA1")
         # data["model"] = "my-new-model"
-        return data 
+        return data
 
     async def async_post_call_failure_hook(
-        self, 
+        self,
         request_data: dict,
-        original_exception: Exception, 
+        original_exception: Exception,
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: Optional[str] = None,
     ):
@@ -215,18 +225,19 @@ class FlexiProxyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
         print("AAAAAAAAAAAAAAAAAAAAAAAAAA3")
         pass
 
-    async def async_moderation_hook( # call made in parallel to llm api call
+    async def async_moderation_hook(  # call made in parallel to llm api call
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        call_type: Literal[            
+        call_type: Literal[
             "completion",
             "embeddings",
             "image_generation",
             "moderation",
             "audio_transcription",
             "responses",
-            "mcp_call",],
+            "mcp_call",
+        ],
     ):
         print("AAAAAAAAAAAAAAAAAAAAAAAAAA4")
         pass
@@ -252,5 +263,6 @@ class FlexiProxyCustomHandler(CustomLogger): # https://docs.litellm.ai/docs/obse
         """
         async for item in response:
             yield item
+
 
 proxy_handler_instance = FlexiProxyCustomHandler()
