@@ -53,7 +53,7 @@ class TokenRotator:
         Returns True if successful, False otherwise. Trigger per 25 minutes ( < 30min Token expiration)
         """
 
-        if not APP_BASE_URL:
+        if APP_BASE_URL is None:
             print("Missing APP_BASE_URL environment variable")
             return
 
@@ -62,7 +62,7 @@ class TokenRotator:
             cls._token_cache if cls._token_cache is not None else APP_TOKEN_PASS
         )
 
-        if not current_token:
+        if current_token is None:
             print("No current token available for exchange")
             return
 
@@ -115,7 +115,7 @@ class KeyPairLoader:
 
         private_pem_bytes = Path("key.pem").read_bytes()
         public_pem_bytes = Path("public.pem").read_bytes()
-        if not KEYPAIR_PWD:
+        if KEYPAIR_PWD is None:
             print("keys password is invalid")
             return
         password = KEYPAIR_PWD.encode("ascii")
@@ -138,12 +138,15 @@ class KeyPairLoader:
             print("Incorrect Password")
 
     @classmethod
-    def request(cls, api_key: str, app_token: str) -> None | dict:
-        if not APP_BASE_URL:
+    def request(cls, api_key: str | None, app_token: str | None) -> None | dict:
+        if APP_BASE_URL is None:
             print("Missing APP_BASE_URL environment variable")
             return None
         if cls._public_key is None or cls._private_key is None:
             print("Keys not Loaded")
+            return None
+        if api_key is None or app_token is None:
+            print("API Key or APP Token invalid")
             return None
         headers = {
             "authorization": f"Bearer {app_token}",
@@ -189,14 +192,14 @@ class StatusReporter:
         """
         with cls._lock:
             if (
-                not APP_BASE_URL
-                or not APP_PROVIDER_SUBDOMAIN_URL
-                or not APP_PROVIDER_ID
+                APP_BASE_URL is None
+                or APP_PROVIDER_SUBDOMAIN_URL is None
+                or APP_PROVIDER_ID is None
             ):
                 raise ValueError(
                     "Missing required environment variables: APP_BASE_URL, APP_PROVIDER_ID, or APP_PROVIDER_SUBDOMAIN_URL"
                 )
-            if not app_token:
+            if app_token is None:
                 raise ValueError("Missing app token")
             request_count = cls._request_counter
             if request_count < 100:
@@ -242,6 +245,11 @@ class FlexiProxyCustomHandler(
     CustomLogger
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
+
+    _key_pair_loader: KeyPairLoader | None = None
+    _token_rotator: TokenRotator | None = None
+    _status_reporter: StatusReporter | None = None
+
     def __init__(self):
         self._key_pair_loader = KeyPairLoader()
         self._key_pair_loader.unload()
@@ -254,13 +262,19 @@ class FlexiProxyCustomHandler(
         self._scheduler_thread.start()
 
     def __del__(self):
-        self._key_pair_loader.unload()
-        self._token_rotator.clear()
-        pass
+        if self._key_pair_loader is not None:
+            self._key_pair_loader.unload()
+        if self._token_rotator is not None:
+            self._token_rotator.clear()
 
     def start_scheduler(self):
+
+        if self._status_reporter is None or self._token_rotator is None:
+            print("")
+            return
+
         schedule.every(25).minutes.do(self._token_rotator.rotate)  # type: ignore
-        schedule.every(45).minutes.do(  # type: ignore
+        schedule.every(30).minutes.do(  # type: ignore
             self._status_reporter.upload, self._token_rotator.token()
         )
         while True:
@@ -286,6 +300,18 @@ class FlexiProxyCustomHandler(
             "mcp_call",
         ],
     ):
+        if (
+            self._key_pair_loader is None
+            or self._status_reporter is None
+            or self._token_rotator is None
+        ):
+            print("")
+            return None
+        self._status_reporter.update()
+        response = self._key_pair_loader.request(
+            api_key="111", app_token=self._token_rotator.token()
+        )
+
         print("AAAAAAAAAAAAAAAAAAAAAAAAAA1")
         # data["model"] = "my-new-model"
         return data
