@@ -217,8 +217,8 @@ class StatusReporter:
                 "adv": False,
             }
             headers = {
-                "authorization": f"Bearer {app_token}",
-                "accept": "application/json",
+                "Authorization": f"Bearer {app_token}",
+                "Content-Type": "application/json",
             }
             response = requests.post(
                 f"{APP_BASE_URL}/api/providers/{APP_PROVIDER_ID}",
