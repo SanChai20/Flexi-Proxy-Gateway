@@ -42,6 +42,6 @@ def generate_key_pair():
 
 if __name__ == "__main__":
     """Usage:
-    Visual Studio Code : [F1] -> [Tasks: Run Task] -> [ - 生成密钥对]
+    Visual Studio Code : [F1] -> [Tasks: Run Task] -> [Generate Key Pair]
     """
     generate_key_pair()
