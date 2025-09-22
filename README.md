@@ -23,3 +23,4 @@
 ### 5. Start Proxy Server
 
 
+litellm --config config.yaml

@@ -1,9 +1,11 @@
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any, AsyncGenerator, Literal, Optional
 
 import requests
+import schedule
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
@@ -181,7 +183,7 @@ class StatusReporter:
     _lock = threading.Lock()
 
     @classmethod
-    def upload(cls, app_token: str) -> None:
+    def upload(cls, app_token: str | None) -> None:
         """
         Trigger per 45 minutes (< 1 hour expiration)
         """
@@ -192,8 +194,10 @@ class StatusReporter:
                 or not APP_PROVIDER_ID
             ):
                 raise ValueError(
-                    "Missing required environment variables: TARGET_URL, PROVIDER_ID, or SUBDOMAIN_URL"
+                    "Missing required environment variables: APP_BASE_URL, APP_PROVIDER_ID, or APP_PROVIDER_SUBDOMAIN_URL"
                 )
+            if not app_token:
+                raise ValueError("Missing app token")
             request_count = cls._request_counter
             if request_count < 100:
                 status: Literal["unavailable", "spare", "busy", "full"] = "spare"
@@ -239,11 +243,29 @@ class FlexiProxyCustomHandler(
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
     # Class variables or attributes
     def __init__(self):
-        # self._key_pair_loader = KeyPairLoader()
-        # self._key_pair_loader.unload()
-        # self._key_pair_loader.load()
-        # self._token_rotator_instance = TokenRotator()
+        self._key_pair_loader = KeyPairLoader()
+        self._key_pair_loader.unload()
+        self._key_pair_loader.load()
+        self._token_rotator = TokenRotator()
+        self._status_reporter = StatusReporter()
+        self._scheduler_thread = threading.Thread(
+            target=self.start_scheduler, daemon=True
+        )
+        self._scheduler_thread.start()
+
+    def __del__(self):
+        self._key_pair_loader.unload()
+        self._token_rotator.clear()
         pass
+
+    def start_scheduler(self):
+        schedule.every(25).minutes.do(self._token_rotator.rotate)  # type: ignore
+        schedule.every(45).minutes.do(  # type: ignore
+            self._status_reporter.upload, self._token_rotator.token()
+        )
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
 
     #### CALL HOOKS - proxy only ####
 
