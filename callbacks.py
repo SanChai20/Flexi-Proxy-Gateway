@@ -138,7 +138,9 @@ class KeyPairLoader:
             print("Incorrect Password")
 
     @classmethod
-    def request(cls, api_key: str | None, app_token: str | None) -> None | dict:
+    def request(
+        cls, api_key: str | None, app_token: str | None
+    ) -> None | dict[str, str]:
         if APP_BASE_URL is None:
             print("Missing APP_BASE_URL environment variable")
             return None
@@ -256,6 +258,7 @@ class FlexiProxyCustomHandler(
         self._key_pair_loader.load()
         self._token_rotator = TokenRotator()
         self._status_reporter = StatusReporter()
+        self._status_reporter.upload(self._token_rotator.token())
         self._scheduler_thread = threading.Thread(
             target=self.start_scheduler, daemon=True
         )
@@ -305,15 +308,39 @@ class FlexiProxyCustomHandler(
             or self._status_reporter is None
             or self._token_rotator is None
         ):
-            print("")
+            print("Not init")
             return None
-        self._status_reporter.update()
-        response = self._key_pair_loader.request(
-            api_key="111", app_token=self._token_rotator.token()
-        )
 
-        print("AAAAAAAAAAAAAAAAAAAAAAAAAA1")
-        # data["model"] = "my-new-model"
+        if "secret_fields" not in data:
+            print("secret_fields field not found in data")
+            return None
+
+        if "raw_headers" not in data["secret_fields"]:
+            print('raw_headers field not found in data["secret_fields"]')
+            return None
+
+        raw_headers: dict | None = data["secret_fields"]["raw_headers"]
+
+        if raw_headers is None:
+            print('raw_headers field not found in data["secret_fields"]["raw_headers"]')
+            return None
+
+        if "x-api-key" in raw_headers:
+            client_api_key = raw_headers["x-api-key"]
+        elif (
+            "authorization" in raw_headers
+            and isinstance(raw_headers["authorization"], str)
+            and str(raw_headers["authorization"]).startswith("Bearer ")
+        ):
+            client_api_key = str(raw_headers["authorization"]).replace("Bearer ", "")
+
+        response = self._key_pair_loader.request(
+            api_key=client_api_key, app_token=self._token_rotator.token()
+        )
+        if response is None:
+            return None
+
+        self._status_reporter.update()
         return data
 
     async def async_post_call_failure_hook(
