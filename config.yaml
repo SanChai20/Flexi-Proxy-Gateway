@@ -1,0 +1,2 @@
+litellm_settings:
+  callbacks: callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
