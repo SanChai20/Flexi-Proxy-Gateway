@@ -21,12 +21,20 @@
             "windows": {
                 "command": ".\\.venv\\Scripts\\pip freeze > requirements.txt",
             },
+            "linux": {
+                "command": ".venv/bin/pip3 freeze > requirements.txt"
+            },
             "group": "none"
         },
         {
             "label": "Generate Key Pair",
             "type": "shell",
-            "command": "${config:python.defaultInterpreterPath}",
+            "windows": {
+                "command": ".venv\\Scripts\\python",
+            },
+            "linux": {
+                "command": ".venv/bin/python3"
+            },
             "args": [
                 "admin/create_key_pair.py",
             ],

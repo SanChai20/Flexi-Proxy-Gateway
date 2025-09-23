@@ -96,7 +96,7 @@
 4. 配置环境变量
 
     ```cmd
-    
+    cp .env.example .env
     ```
 
     如果部署生产环境，使用此指令:
@@ -107,7 +107,7 @@
 5. 生成密钥对
 
     ```cmd
-    
+    python3 admin/create_key_pair.py
     ```
 
 
@@ -197,7 +197,7 @@
 4. Configure Environment Variables
 
     ```cmd
-    
+    cp .env.example .env
     ```
 
     if deploy for production, use this:
@@ -208,13 +208,13 @@
 5. Generate Key Pair
 
     ```cmd
-    
+    python3 admin/create_key_pair.py
     ```
 
 6. Start LiteLLM Proxy Server
 
     ```cmd
-    
+    litellm
     ```
 
 
