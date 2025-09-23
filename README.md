@@ -78,19 +78,19 @@
 1. 创建Python虚拟环境
 
     ```cmd
-    
+    python3 -m venv .venv
     ```
 
 2. 激活虚拟环境
    
    ```cmd
-   
+   source .venv/bin/activate
    ```
 
 3. 安装依赖库
 
     ```cmd
-    
+    pip3 install -r requirements.txt
     ```
 
 4. 配置环境变量
@@ -179,19 +179,19 @@
 1. Create Python Virtual Environment
 
     ```cmd
-    
+    python3 -m venv .venv
     ```
 
 2. Activate Virtual Environment
    
    ```cmd
-   
+   source .venv/bin/activate
    ```
 
 3. Install Dependencies
 
     ```cmd
-    
+    pip3 install -r requirements.txt
     ```
 
 4. Configure Environment Variables
