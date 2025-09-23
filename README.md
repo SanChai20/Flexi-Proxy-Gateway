@@ -43,7 +43,7 @@
 3. 安装依赖库
 
     ```cmd
-    pip install -r requirements.txt
+    pip install -r requirements-windows.txt
     ```
 
 4. 配置环境变量
@@ -88,7 +88,7 @@
 3. 安装依赖库
 
     ```cmd
-    pip3 install -r requirements.txt
+    pip3 install -r requirements-linux.txt
     ```
 
 4. 配置环境变量
@@ -141,7 +141,7 @@
 3. Install Dependencies
 
     ```cmd
-    pip install -r requirements.txt
+    pip install -r requirements-windows.txt
     ```
 
 4. Configure Environment Variables
@@ -187,7 +187,7 @@
 3. Install Dependencies
 
     ```cmd
-    pip3 install -r requirements.txt
+    pip3 install -r requirements-linux.txt
     ```
 
 4. Configure Environment Variables

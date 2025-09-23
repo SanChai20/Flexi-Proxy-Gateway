@@ -13,24 +13,24 @@
             "group": "none"
         },
         {
-            "label": "Install Dependencies by requirements.txt",
+            "label": "Install Dependencies by requirements-*.txt",
             "type": "shell",
             "windows": {
-                "command": ".\\.venv\\Scripts\\pip install -r requirements.txt",
+                "command": ".\\.venv\\Scripts\\pip install -r requirements-windows.txt",
             },
             "linux": {
-                "command": ".venv/bin/pip3 install -r requirements.txt"
+                "command": ".venv/bin/pip3 install -r requirements-linux.txt"
             },
             "group": "none"
         },
         {
-            "label": "Sync Dependencies to requirements.txt",
+            "label": "Sync Dependencies to requirements-*.txt",
             "type": "shell",
             "windows": {
-                "command": ".\\.venv\\Scripts\\pip freeze > requirements.txt",
+                "command": ".\\.venv\\Scripts\\pip freeze > requirements-windows.txt",
             },
             "linux": {
-                "command": ".venv/bin/pip3 freeze > requirements.txt"
+                "command": ".venv/bin/pip3 freeze > requirements-linux.txt"
             },
             "group": "none"
         },

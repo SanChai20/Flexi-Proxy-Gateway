@@ -11,7 +11,7 @@ PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
 
 
 def generate_key_pair():
-    key_size = 8192  # Should be at least 2048
+    key_size = 4096  # Should be at least 2048
 
     private_key = rsa.generate_private_key(
         public_exponent=65537,  # Do not change
