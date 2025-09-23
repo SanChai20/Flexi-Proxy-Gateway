@@ -19,13 +19,16 @@
   <a href="#-english">English</a>
 </p>
 
+
+
+
 ---
 
 ## 🇨🇳 中文
 
 ### 本地部署
 
-- Windows 操作系统
+#### **Windows 操作系统**
 
 1. 创建Python虚拟环境
 
@@ -51,6 +54,11 @@
     cp .env.example .env
     ```
 
+    如果部署生产环境，使用此指令:
+    ```cmd
+    set LITELLM_MODE=PRODUCTION
+    ```
+
 5. 生成密钥对
 
     ```cmd
@@ -61,13 +69,53 @@
 6. 启动litellm代理服务
 
     ```cmd
-    litellm --config config.yaml
+    litellm --config config.yaml --port 4000 
     ```
 
 
-- Linux 操作系统
+#### **Linux 操作系统**
+
+1. 创建Python虚拟环境
+
+    ```cmd
+    
+    ```
+
+2. 激活虚拟环境
+   
+   ```cmd
+   
+   ```
+
+3. 安装依赖库
+
+    ```cmd
+    
+    ```
+
+4. 配置环境变量
+
+    ```cmd
+    
+    ```
+
+    如果部署生产环境，使用此指令:
+    ```cmd
+    export LITELLM_MODE=PRODUCTION
+    ```
+
+5. 生成密钥对
+
+    ```cmd
+    
+    ```
 
 
+6. 启动litellm代理服务
+
+    ```cmd
+    
+    ```
 
 
 
@@ -76,38 +124,106 @@
 
 ## 🇺🇸 English
 
-- Windows OS
+### Local Deployment
+
+
+#### **Windows OS**
+
+
+1. Create Python Virtual Environment
+
+    ```cmd
+    py -m venv .venv
+    ```
+
+2. Activate Virtual Environment
+   
+   ```cmd
+   .\.venv\Scripts\activate
+   ```
+
+3. Install Dependencies
+
+    ```cmd
+    pip install -r requirements.txt
+    ```
+
+4. Configure Environment Variables
+
+    ```cmd
+    cp .env.example .env
+    ```
+
+    if deploy for production, use this:
+    ```cmd
+    set LITELLM_MODE=PRODUCTION
+    ```
+
+5. Generate Key Pair
+
+    ```cmd
+    python admin/create_key_pair.py
+    ```
+
+6. Start LiteLLM Proxy Server
+
+    ```cmd
+    litellm --config config.yaml --port 4000 
+    ```
+
+
+
+#### **Linux OS**
+
+
+1. Create Python Virtual Environment
+
+    ```cmd
+    
+    ```
+
+2. Activate Virtual Environment
+   
+   ```cmd
+   
+   ```
+
+3. Install Dependencies
+
+    ```cmd
+    
+    ```
+
+4. Configure Environment Variables
+
+    ```cmd
+    
+    ```
+
+    if deploy for production, use this:
+    ```cmd
+    export LITELLM_MODE=PRODUCTION
+    ```
+
+5. Generate Key Pair
+
+    ```cmd
+    
+    ```
+
+6. Start LiteLLM Proxy Server
+
+    ```cmd
+    
+    ```
 
 
 
 
 
 
-- Linux OS
-
-### 1. Create Python Virtual Environment
-
-
-
-### 2. Install Dependencies
-
-
-
-### 3. Configure Environment Variables
-
-
-
-### 4. Create Key Pair
 
 
 
 
-### 5. Start Proxy Server
 
-windows
-set LITELLM_MODE=PRODUCTION
-linux
-export LITELLM_MODE="PRODUCTION"
-
-
-litellm --config config.yaml
