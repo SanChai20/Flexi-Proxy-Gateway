@@ -21,7 +21,6 @@ from urllib3 import Retry
 
 load_dotenv()
 
-
 handler = TimedRotatingFileHandler(
     "app.log", when="midnight", interval=1, backupCount=7
 )
@@ -32,26 +31,28 @@ logger = logging.getLogger(__name__)
 
 
 class Config:
+    # App
     APP_TOKEN_PASS = os.getenv("APP_TOKEN_PASS", None)
     APP_BASE_URL = os.getenv("APP_BASE_URL", None)
-    APP_PROVIDER_SUBDOMAIN_URL = os.getenv("APP_PROVIDER_SUBDOMAIN_URL", None)
-    APP_PROVIDER_ID = os.getenv("APP_PROVIDER_ID", None)
-    APP_PROVIDER_ADVANCED = os.getenv("APP_PROVIDER_ADVANCED", False)
-    KEYPAIR_PWD = os.getenv("KEYPAIR_PWD", None)
 
-    REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "120"))  # 请求超时时间
+    # Proxy Server
+    PROXY_SERVER_URL = os.getenv("PROXY_SERVER_URL", None)
+    PROXY_SERVER_ID = os.getenv("PROXY_SERVER_ID", None)
+    PROXY_SERVER_ADVANCED = os.getenv("PROXY_SERVER_ADVANCED", False)
+    PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
 
-    # Scheduler related
+    # Scheduler
     SCHEDULE_TOKEN_ROTATION_INTERVAL = int(
         os.getenv("SCHEDULE_TOKEN_ROTATION_INTERVAL", "10")
     )  # 分钟
     SCHEDULE_STATUS_REPORT_INTERVAL = int(
         os.getenv("SCHEDULE_STATUS_REPORT_INTERVAL", "30")
     )  # 分钟
-    # Thread related
+
+    # Thread
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))  # 线程池最大工作线程数
 
-    # LRU Cache related
+    # LRU Cache
     LRU_MAX_CACHE_SIZE = int(os.getenv("LRU_MAX_CACHE_SIZE", "1000"))  # 最大缓存条目数
     LRU_MAX_CACHE_TTL = int(os.getenv("LRU_MAX_CACHE_TTL", "1800"))  # 秒
 
@@ -282,14 +283,14 @@ class KeyPairLoader:
                 logger.error("Key files not found")
                 return False
 
-            if not Config.KEYPAIR_PWD:
+            if not Config.PROXY_SERVER_KEYPAIR_PWD:
                 logger.error("Keys password is invalid")
                 return False
 
             try:
                 private_pem_bytes = key_file_path.read_bytes()
                 public_pem_bytes = public_file_path.read_bytes()
-                password = Config.KEYPAIR_PWD.encode("ascii")
+                password = Config.PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
 
                 private_key = serialization.load_pem_private_key(
                     private_pem_bytes, password=password
@@ -406,8 +407,8 @@ class StatusReporter:
         if not all(
             [
                 Config.APP_BASE_URL,
-                Config.APP_PROVIDER_SUBDOMAIN_URL,
-                Config.APP_PROVIDER_ID,
+                Config.PROXY_SERVER_URL,
+                Config.PROXY_SERVER_ID,
             ]
         ):
             logger.error("Missing upload required environment variables")
@@ -424,10 +425,10 @@ class StatusReporter:
         else:
             status = "full"
         data = {
-            "url": Config.APP_PROVIDER_SUBDOMAIN_URL,
+            "url": Config.PROXY_SERVER_URL,
             "status": status,
             "ex": 14400,  # seconds = 4 hour
-            "adv": Config.APP_PROVIDER_ADVANCED,
+            "adv": Config.PROXY_SERVER_ADVANCED,
         }
         headers = {
             "Authorization": f"Bearer {app_token}",
@@ -435,7 +436,7 @@ class StatusReporter:
         }
         try:
             response = http_client.post(  # type: ignore
-                f"{Config.APP_BASE_URL}/api/providers/{Config.APP_PROVIDER_ID}",
+                f"{Config.APP_BASE_URL}/api/providers/{Config.PROXY_SERVER_ID}",
                 json=data,
                 headers=headers,
             )
@@ -519,7 +520,7 @@ class OptimizedScheduler:
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
-# Once defined, these can be passed in proxy_config.yaml
+# Once defined, these can be passed in config.yaml
 class FlexiProxyCustomHandler(
     CustomLogger
 ):  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
