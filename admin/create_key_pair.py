@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-KEYPAIR_PWD = os.getenv("KEYPAIR_PWD", None)
+PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
 
 
 def generate_key_pair():
@@ -18,12 +18,12 @@ def generate_key_pair():
         key_size=key_size,
     )
 
-    if KEYPAIR_PWD is None:
-        print("[KEYPAIR_PWD] is none.")
+    if PROXY_SERVER_KEYPAIR_PWD is None:
+        print("[PROXY_SERVER_KEYPAIR_PWD] is none.")
         return
 
     public_key = private_key.public_key()
-    password = KEYPAIR_PWD.encode("ascii")
+    password = PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
 
     key_pem_bytes = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,  # PEM Format is specified

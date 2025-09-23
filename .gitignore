@@ -209,3 +209,7 @@ __marimo__/
 
 # Others
 *.pem
+litellm-cache
+app.log
+app.log.*
+logs

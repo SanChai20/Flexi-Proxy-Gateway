@@ -1,6 +1,7 @@
 import base64
 import logging
 import os
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,13 +21,25 @@ from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
 load_dotenv()
+root_logger = logging.getLogger()
+root_logger.handlers.clear()
+formatter = logging.Formatter("%(asctime)s - %(message)s")
 
-handler = TimedRotatingFileHandler(
+# File
+file_handler = TimedRotatingFileHandler(
     "app.log", when="midnight", interval=1, backupCount=7
 )
-logging.basicConfig(
-    handlers=[handler], level=logging.INFO, format="%(asctime)s - %(message)s"
-)
+file_handler.setFormatter(formatter)
+root_logger.addHandler(file_handler)
+
+# Console
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(formatter)
+root_logger.addHandler(console_handler)
+
+# level
+root_logger.setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
@@ -162,7 +175,6 @@ class HTTPClient:
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
         kwargs.setdefault("timeout", self.timeout)  # type: ignore
-        logger.info(f"{method} request to {url}")
         return self.session.request(method, url, **kwargs)
 
     def post(self, url: str, **kwargs) -> requests.Response:
@@ -460,7 +472,9 @@ class OptimizedScheduler:
         max_workers=Config.MAX_WORKERS, thread_name_prefix="Scheduler"
     )
 
-    _next_token_rotation: float = Config.SCHEDULE_TOKEN_ROTATION_INTERVAL * 60
+    _next_token_rotation: float = (
+        Config.SCHEDULE_TOKEN_ROTATION_INTERVAL * 60 + time.time()
+    )
     _next_status_report: float = 0
     _next_cache_cleanup: float = 0
 

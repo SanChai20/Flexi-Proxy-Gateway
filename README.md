@@ -44,16 +44,25 @@
     ```cmd
     pip install -r requirements.txt
     ```
+
 4. 配置环境变量
 
     ```cmd
     cp .env.example .env
     ```
 
+5. 生成密钥对
 
-5. 
+    ```cmd
+    python admin/create_key_pair.py
+    ```
 
 
+6. 启动litellm代理服务
+
+    ```cmd
+    litellm --config config.yaml
+    ```
 
 
 - Linux 操作系统
