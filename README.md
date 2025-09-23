@@ -33,12 +33,25 @@
     py -m venv .venv
     ```
 
-2. 安装依赖库
+2. 激活虚拟环境
+   
+   ```cmd
+   .\.venv\Scripts\activate
+   ```
+
+3. 安装依赖库
 
     ```cmd
-    
+    pip install -r requirements.txt
+    ```
+4. 配置环境变量
+
+    ```cmd
+    cp .env.example .env
     ```
 
+
+5. 
 
 
 
