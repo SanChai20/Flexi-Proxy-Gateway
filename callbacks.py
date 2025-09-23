@@ -38,7 +38,7 @@ class Config:
     # Proxy Server
     PROXY_SERVER_URL = os.getenv("PROXY_SERVER_URL", None)
     PROXY_SERVER_ID = os.getenv("PROXY_SERVER_ID", None)
-    PROXY_SERVER_ADVANCED = os.getenv("PROXY_SERVER_ADVANCED", False)
+    PROXY_SERVER_ADVANCED = int(os.getenv("PROXY_SERVER_ADVANCED", "0"))
     PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
 
     # Scheduler
@@ -428,7 +428,7 @@ class StatusReporter:
             "url": Config.PROXY_SERVER_URL,
             "status": status,
             "ex": 14400,  # seconds = 4 hour
-            "adv": Config.PROXY_SERVER_ADVANCED,
+            "adv": Config.PROXY_SERVER_ADVANCED == 1,
         }
         headers = {
             "Authorization": f"Bearer {app_token}",
