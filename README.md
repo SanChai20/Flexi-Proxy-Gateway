@@ -11,7 +11,6 @@
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE.md)
 [![LiteLLM](https://img.shields.io/badge/LiteLLM-Docs-orange?logo=litellm)](https://docs.litellm.ai/docs/simple_proxy)
 
-
 </div>
 
 <p align="center">
@@ -22,7 +21,6 @@
 
 
 
----
 
 ## 🇨🇳 中文
 
@@ -114,13 +112,11 @@
 6. 启动litellm代理服务
 
     ```cmd
-    
+    litellm --config config.yaml --port 4000
     ```
 
 
 
-
----
 
 ## 🇺🇸 English
 
@@ -214,16 +210,5 @@
 6. Start LiteLLM Proxy Server
 
     ```cmd
-    litellm
+    litellm --config config.yaml --port 4000
     ```
-
-
-
-
-
-
-
-
-
-
-
