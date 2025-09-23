@@ -4,7 +4,12 @@
         {
             "label": "Create Virtual Environment",
             "type": "shell",
-            "command": "py -3.13 -m venv .venv",
+            "windows": {
+                "command": "py -m venv .venv",
+            },
+            "linux": {
+                "command": "python3 -m venv .venv"
+            },
             "group": "none"
         },
         {
@@ -12,6 +17,9 @@
             "type": "shell",
             "windows": {
                 "command": ".\\.venv\\Scripts\\pip install -r requirements.txt",
+            },
+            "linux": {
+                "command": ".venv/bin/pip3 install -r requirements.txt"
             },
             "group": "none"
         },
