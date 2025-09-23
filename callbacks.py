@@ -44,30 +44,26 @@ class Config:
     # Scheduler
     SCHEDULE_TOKEN_ROTATION_INTERVAL = int(
         os.getenv("SCHEDULE_TOKEN_ROTATION_INTERVAL", "10")
-    )  # 分钟
+    )
     SCHEDULE_STATUS_REPORT_INTERVAL = int(
         os.getenv("SCHEDULE_STATUS_REPORT_INTERVAL", "30")
-    )  # 分钟
+    )
 
     # Thread
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))  # 线程池最大工作线程数
+    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
 
     # LRU Cache
-    LRU_MAX_CACHE_SIZE = int(os.getenv("LRU_MAX_CACHE_SIZE", "1000"))  # 最大缓存条目数
-    LRU_MAX_CACHE_TTL = int(os.getenv("LRU_MAX_CACHE_TTL", "1800"))  # 秒
+    LRU_MAX_CACHE_SIZE = int(os.getenv("LRU_MAX_CACHE_SIZE", "500"))
+    LRU_MAX_CACHE_TTL = int(os.getenv("LRU_MAX_CACHE_TTL", "1800"))
 
     # Http related
-    HTTP_CONNECT_TIMEOUT_LIMIT = int(
-        os.getenv("HTTP_CONNECT_TIMEOUT_LIMIT", "8")
-    )  # 连接超时时间
-    HTTP_READ_TIMEOUT_LIMIT = int(
-        os.getenv("HTTP_READ_TIMEOUT_LIMIT", "120")
-    )  # 读取超时时间
-    HTTP_MAX_RETRY_COUNT = int(os.getenv("HTTP_MAX_RETRY_COUNT", "3"))  # 最大重试次数
+    HTTP_CONNECT_TIMEOUT_LIMIT = int(os.getenv("HTTP_CONNECT_TIMEOUT_LIMIT", "8"))
+    HTTP_READ_TIMEOUT_LIMIT = int(os.getenv("HTTP_READ_TIMEOUT_LIMIT", "120"))
+    HTTP_MAX_RETRY_COUNT = int(os.getenv("HTTP_MAX_RETRY_COUNT", "3"))
+    HTTP_POOL_MAX_SIZE = int(os.getenv("HTTP_POOL_MAX_SIZE", "30"))
     HTTP_MAX_POOL_CONNECTIONS_COUNT = int(
         os.getenv("HTTP_MAX_POOL_CONNECTIONS_COUNT", "10")
-    )  # 缓存的最大连接池数量上限
-    HTTP_POOL_MAX_SIZE = int(os.getenv("HTTP_POOL_MAX_SIZE", "30"))  # 复用连接的数量
+    )
 
 
 @dataclass
