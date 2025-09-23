@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Dict, Literal, Optional, OrderedDict
 
 import requests
-import schedule
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
