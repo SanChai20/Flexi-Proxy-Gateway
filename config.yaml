@@ -3,7 +3,18 @@ model_list:
     litellm_params:
       model: "*"
       custom_llm_provider: openai
+      max_retries: 5
+
+router_settings:
+  routing_strategy: simple-shuffle
 
 litellm_settings:
+  request_timeout: 600    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
+  set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
+  json_logs: true         # Get debug logs in json format
   drop_params: True
   callbacks: callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+  cache: True
+  cache_params:
+    type: disk
+    disk_cache_dir: ./litellm-cache

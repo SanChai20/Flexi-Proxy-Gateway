@@ -22,5 +22,10 @@
 
 ### 5. Start Proxy Server
 
+windows
+set LITELLM_MODE=PRODUCTION
+linux
+export LITELLM_MODE="PRODUCTION"
+
 
 litellm --config config.yaml
