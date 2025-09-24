@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import atexit  # 新增: 用于 shutdown
 import base64
 import logging
@@ -63,6 +65,7 @@ class Config:
     SCHEDULE_STATUS_REPORT_INTERVAL = int(
         os.getenv("SCHEDULE_STATUS_REPORT_INTERVAL", "30")
     )
+    SCHEDULE_CLEANUP_INTERVAL = int(os.getenv("SCHEDULE_CLEANUP_INTERVAL", "60"))
 
     # Thread
     MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
@@ -79,12 +82,10 @@ class Config:
     HTTP_MAX_POOL_CONNECTIONS_COUNT = int(
         os.getenv("HTTP_MAX_POOL_CONNECTIONS_COUNT", "10")
     )
-
-    # 新增: 其他硬编码
-    TOKEN_EXPIRES_DEFAULT = int(os.getenv("TOKEN_EXPIRES_DEFAULT", "7200"))
-    CLEANUP_INTERVAL = int(os.getenv("CLEANUP_INTERVAL", "3600"))
-    STATUS_REPORT_EXPIRES = int(os.getenv("STATUS_REPORT_EXPIRES", "7200"))
     HTTP_RETRY_BACKOFF = float(os.getenv("HTTP_RETRY_BACKOFF", "0.5"))
+
+    # Others
+    STATUS_REPORT_EXPIRES = int(os.getenv("STATUS_REPORT_EXPIRES", "7200"))
 
 
 @dataclass
@@ -199,14 +200,14 @@ class HTTPClient:
         self.session.mount("https://", adapter)
 
     def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        kwargs.setdefault("timeout", self.timeout)
+        kwargs.setdefault("timeout", self.timeout)  # type: ignore
         return self.session.request(method, url, **kwargs)
 
     def post(self, url: str, **kwargs) -> requests.Response:
-        return self._request("POST", url, **kwargs)
+        return self._request("POST", url, **kwargs)  # type: ignore
 
     def get(self, url: str, **kwargs) -> requests.Response:
-        return self._request("GET", url, **kwargs)
+        return self._request("GET", url, **kwargs)  # type: ignore
 
     def close(self):
         self.session.close()
@@ -214,259 +215,322 @@ class HTTPClient:
 
 class TokenRotator:
     _env_lock = threading.RLock()
+    _condition = threading.Condition(_env_lock)
     _token_cache: Optional[str] = None
     _expires_at: float = 0
+    _initial_exchange_done: bool = False
+    _initial_failed: bool = False
+    _rotating: bool = False
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
 
     @classmethod
-    def token(cls) -> str | None:
-        with cls._env_lock:
-            if cls._token_cache is not None and time.time() < cls._expires_at:
-                return cls._token_cache
-            # Fallback to env, but log warning
-            if Config.APP_TOKEN_PASS:
-                logger.warning("Using fallback token from env (may be expired)")
-                return Config.APP_TOKEN_PASS
-            logger.error("No valid token available")
-            return None
+    def token(cls, http_client: "HTTPClient") -> Optional[str]:
+        current_token: Optional[str] = None
+        was_using_cache: bool = False
+        is_initial: bool = False
+
+        while True:
+            with cls._env_lock:
+                now = time.time()
+
+                # Check if we have a valid cached token
+                if cls._token_cache is not None and now < cls._expires_at:
+                    return cls._token_cache
+
+                # Early fallback for initial failure
+                if not cls._initial_exchange_done and cls._initial_failed:
+                    logger.warning(
+                        "Initial token exchange failed previously; falling back to env token"
+                    )
+                    return Config.APP_TOKEN_PASS
+
+                # If another thread is rotating, wait for it to complete
+                if cls._rotating:
+                    logger.debug("Token rotation in progress; waiting...")
+                    cls._condition.wait()
+                    continue  # Recheck conditions after wakeup
+
+                # No valid token; start rotation
+                current_token = (
+                    cls._token_cache
+                    if cls._token_cache is not None
+                    else Config.APP_TOKEN_PASS
+                )
+                if current_token is None:
+                    logger.error("No current token available for exchange")
+                    return None
+
+                was_using_cache = cls._token_cache is not None
+                is_initial = not cls._initial_exchange_done and not was_using_cache
+                cls._rotating = True
+                logger.debug("Starting token rotation...")
+
+            # Only the rotator thread reaches here (others wait)
+            # Perform the HTTP exchange outside the lock to avoid blocking
+            success_token: Optional[str] = None
+            new_expires_at: float = 0
+            try:
+                response: requests.Response = http_client.post(  # type: ignore
+                    url=f"{Config.APP_BASE_URL}/api/auth/exchange",
+                    headers={"authorization": f"Bearer {current_token}"},
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except ValueError as e:
+                        logger.error(f"Failed to parse token response JSON: {e}")
+                        raise  # Treat as failure
+
+                    new_token = data.get("token")
+                    expires_in = data.get("expiresIn")
+
+                    if new_token and expires_in is not None:
+                        success_token = new_token
+                        new_expires_at = (
+                            time.time() + expires_in - 300
+                        )  # 5-minute buffer
+                        logger.info(
+                            f"Token rotated successfully, expires in {expires_in}s"
+                        )
+                    else:
+                        logger.error(
+                            "Token response missing 'token' or 'expiresIn' field"
+                        )
+                        raise  # Treat as failure
+                else:
+                    logger.error(f"Token rotate failed: {response.status_code}")
+                    raise  # Treat as failure
+
+            except (
+                requests.RequestException
+            ) as e:  # Adjust exception if HTTPClient differs
+                logger.error(f"Token rotate request failed: {e}")
+            except Exception as e:
+                logger.error(f"Unexpected error in token rotate: {e}")
+
+            # Update state after exchange attempt
+            with cls._env_lock:
+                cls._rotating = False
+                if success_token:
+                    cls._token_cache = success_token
+                    cls._expires_at = new_expires_at
+                    if is_initial:
+                        cls._initial_exchange_done = True
+                    cls._initial_failed = False
+                    cls._condition.notify_all()
+                    logger.debug("Token rotation completed; notified waiters")
+                    return success_token  # Rotator returns the new token directly
+                else:
+                    # Failure handling
+                    if is_initial:
+                        cls._initial_failed = True
+                        logger.warning(
+                            "Initial token exchange failed; will fallback to env token on future calls"
+                        )
+                    elif was_using_cache:
+                        # For non-initial failures, clear the invalid cache
+                        cls._token_cache = None
+                        cls._expires_at = 0
+                        logger.warning(
+                            "Cleared invalid cached token after rotation failure"
+                        )
+                    cls._condition.notify_all()
+                    logger.debug("Token rotation failed; notified waiters")
 
     @classmethod
     def clear(cls) -> None:
+        """Clear the cached token, forcing a rotation on next token() call."""
         with cls._env_lock:
             cls._token_cache = None
             cls._expires_at = 0
-
-    @classmethod
-    @retry()  # 加重试
-    def rotate(cls, http_client: HTTPClient) -> bool:
-        if Config.APP_BASE_URL is None:
-            logger.error("Missing APP_BASE_URL environment variable")
-            return False
-
-        current_token = cls.token()
-        if not current_token:
-            logger.error("No current token available for exchange")
-            return False
-
-        try:
-            response = http_client.post(
-                url=f"{Config.APP_BASE_URL}/api/auth/exchange",
-                headers={"authorization": f"Bearer {current_token}"},
-            )
-
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                except ValueError as e:
-                    logger.error(f"Failed to parse token response JSON: {e}")
-                    return False
-
-                new_token = data.get("token")
-                expires_in = data.get("expiresIn", Config.TOKEN_EXPIRES_DEFAULT)
-
-                if new_token:
-                    with cls._env_lock:
-                        cls._token_cache = new_token
-                        cls._expires_at = time.time() + expires_in - 300  # 提前5min
-
-                    logger.info(f"Token rotated successfully, expires in {expires_in}s")
-                    return True
-                else:
-                    logger.error("Token response missing 'token' field")
-                    cls.clear()
-                    return False
-            else:
-                logger.error(f"Token rotate failed: {response.status_code}")
-                cls.clear()
-                return False
-
-        except requests.RequestException as e:
-            logger.error(f"Token rotate request failed: {e}")
-            cls.clear()
-            return False
-        except Exception as e:  # 窄: 只 catch 意外
-            logger.error(f"Unexpected error in token rotate: {e}")
-            return False
 
 
 class KeyPairLoader:
     _private_key: Optional[rsa.RSAPrivateKey] = None
     _public_key: Optional[str] = None
-    _loaded: bool = False
-    _lock: threading.RLock = threading.RLock()
-    _exchange_locks: Dict[str, threading.Lock] = {}  # 新增: per-key 锁防重复 exchange
-    _adapter_cache: LRUCache = LRUCache()
-    _http_client = HTTPClient()  # 统一用 Config
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
 
     @classmethod
-    def load(cls) -> bool:
-        if cls._loaded:
-            return True
-
-        with cls._lock:
-            if cls._loaded:
-                return True
-
-            key_file_path = Path.cwd() / "key.pem"
-            public_file_path = Path.cwd() / "public.pem"
-
-            if not key_file_path.exists() or not public_file_path.exists():
-                logger.error("Key files not found")
-                return False
-
-            if not Config.PROXY_SERVER_KEYPAIR_PWD:
-                logger.error("Keys password is invalid")
-                return False
-
-            try:
-                private_pem_bytes = key_file_path.read_bytes()
-                public_pem_bytes = public_file_path.read_bytes()
-                password = Config.PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
-
-                private_key = serialization.load_pem_private_key(
-                    private_pem_bytes, password=password
-                )
-
-                if not isinstance(private_key, rsa.RSAPrivateKey):
-                    raise TypeError(f"Expected RSAPrivateKey, got {type(private_key)}")
-
-                cls._private_key = private_key
-                cls._public_key = public_pem_bytes.decode("utf-8")
-                cls._loaded = True
-                logger.info("Keys Correctly Loaded")
-                return True
-
-            except Exception as e:
-                logger.error(f"Key loading failed: {e}")
-                return False
+    def public_key(cls) -> Optional[str]:
+        return cls._public_key
 
     @classmethod
-    def exchange(
-        cls, api_key: str | None, app_token: str | None
-    ) -> Optional[Dict[str, str]]:
-        # 加锁检查密钥
-        with cls._lock:
-            if not cls._loaded or cls._public_key is None or cls._private_key is None:
-                logger.error("Keys not loaded")
-                return None
-
-        if not all([Config.APP_BASE_URL, api_key, app_token]):
-            logger.error("Invalid request params")
+    def decrypt(cls, msg_bytes: bytes) -> Optional[str]:
+        if cls._private_key is None:
+            return None
+        try:
+            message_decrypted: bytes = cls._private_key.decrypt(
+                msg_bytes,
+                padding.OAEP(
+                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                    algorithm=hashes.SHA256(),
+                    label=None,
+                ),
+            )
+            return message_decrypted.decode("utf-8")
+        except Exception as e:
+            logger.error(f"Decrypt failed: {e}")
             return None
 
-        cache_key = f"{api_key}:{app_token}"
-
-        # 先查缓存
-        cached_entry = cls._adapter_cache.get(cache_key)
-        if cached_entry:
-            return cached_entry.data
-
-        # Per-key 锁防重复
-        if cache_key not in cls._exchange_locks:
-            with cls._lock:  # 原子创建锁
-                if cache_key not in cls._exchange_locks:
-                    cls._exchange_locks[cache_key] = threading.Lock()
-        lock = cls._exchange_locks[cache_key]
-
-        with lock:
-            # 双查缓存 (其他线程可能已填充)
-            cached_entry = cls._adapter_cache.get(cache_key)
-            if cached_entry:
-                return cached_entry.data
-
-            # 执行 HTTP
-            headers = {
-                "authorization": f"Bearer {app_token}",
-                "X-API-Key": api_key,
-                "Content-Type": "application/json",
-            }
-            data = {"public_key": cls._public_key}
-            try:
-                response = cls._http_client.post(
-                    f"{Config.APP_BASE_URL}/api/adapters", headers=headers, json=data
-                )
-                response.raise_for_status()
-            except requests.RequestException as e:
-                logger.error(f"Request failed: {e}")
-                return None
-
-            try:
-                response_data = response.json()
-            except ValueError as e:
-                logger.error(f"Failed to parse JSON response: {e}")
-                return None
-
-            result: Dict[str, str] = {}
-            try:
-                required_fields = ["uid", "url", "mid", "enc"]
-                if not all(field in response_data for field in required_fields):
-                    raise KeyError("Missing required fields in response")
-
-                result["uid"] = response_data["uid"]
-                result["url"] = response_data["url"]
-                result["mid"] = response_data["mid"]
-
-                message_bytes = base64.b64decode(response_data["enc"])  # 加 try
-                try:
-                    message_decrypted: bytes = cls._private_key.decrypt(
-                        message_bytes,
-                        padding.OAEP(
-                            mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                            algorithm=hashes.SHA256(),
-                            label=None,
-                        ),
-                    )
-                except ValueError as e:
-                    logger.error(f"Decryption failed: {e}")
-                    return None
-
-                # 加 try decode
-                try:
-                    result["key"] = message_decrypted.decode("utf-8")
-                except UnicodeDecodeError as e:
-                    logger.error(f"Key decode failed: {e}")
-                    return None
-
-                cache_entry = AdapterCacheEntry(
-                    data=result, timestamp=time.time(), ttl=Config.LRU_MAX_CACHE_TTL
-                )
-                cls._adapter_cache.set(cache_key, cache_entry)
-                return result
-            except KeyError as e:
-                logger.error(f"Missing key in response data: {e}")
-                return None
-            except Exception as e:
-                logger.error(f"Error processing adapter response: {e}")
-                return None
-
     @classmethod
-    def cleanup_cache(cls):
-        cls._adapter_cache.clear_expired()
-        # 清理旧锁 (可选, 定期)
-        if len(cls._exchange_locks) > Config.LRU_MAX_CACHE_SIZE * 2:
-            cls._exchange_locks.clear()
+    def load(cls) -> bool:
+        key_file_path = Path.cwd() / "key.pem"
+        public_file_path = Path.cwd() / "public.pem"
+
+        if not key_file_path.exists() or not public_file_path.exists():
+            logger.error("Key files not found")
+            return False
+
+        if not Config.PROXY_SERVER_KEYPAIR_PWD:
+            logger.error("Keys password is invalid")
+            return False
+
+        try:
+            private_pem_bytes = key_file_path.read_bytes()
+            public_pem_bytes = public_file_path.read_bytes()
+            password = Config.PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
+
+            private_key = serialization.load_pem_private_key(
+                private_pem_bytes, password=password
+            )
+
+            if not isinstance(private_key, rsa.RSAPrivateKey):
+                raise TypeError(f"Expected RSAPrivateKey, got {type(private_key)}")
+
+            cls._private_key = private_key
+            cls._public_key = public_pem_bytes.decode("utf-8")
+            logger.info("Keys Correctly Loaded")
+            return True
+
+        except Exception as e:
+            logger.error(f"Key loading failed: {e}")
+            return False
 
     @classmethod
     def unload(cls):
-        with cls._lock:
-            cls._private_key = None
-            cls._public_key = None
-            cls._loaded = False
-            cls._adapter_cache = LRUCache()
-            cls._exchange_locks.clear()
-        cls._http_client.close()
+        cls._private_key = None
+        cls._public_key = None
+
+    # @classmethod
+    # def decrypt(
+    #     cls, api_key: str | None, app_token: str | None
+    # ) -> Optional[Dict[str, str]]:
+    #     # 加锁检查密钥
+    #     with cls._lock:
+    #         if not cls._loaded or cls._public_key is None or cls._private_key is None:
+    #             logger.error("Keys not loaded")
+    #             return None
+
+    #     if not all([Config.APP_BASE_URL, api_key, app_token]):
+    #         logger.error("Invalid request params")
+    #         return None
+
+    #     cache_key = f"{api_key}:{app_token}"
+
+    #     # 先查缓存
+    #     cached_entry = cls._adapter_cache.get(cache_key)
+    #     if cached_entry:
+    #         return cached_entry.data
+
+    #     # Per-key 锁防重复
+    #     if cache_key not in cls._exchange_locks:
+    #         with cls._lock:  # 原子创建锁
+    #             if cache_key not in cls._exchange_locks:
+    #                 cls._exchange_locks[cache_key] = threading.Lock()
+    #     lock = cls._exchange_locks[cache_key]
+
+    #     with lock:
+    #         # 双查缓存 (其他线程可能已填充)
+    #         cached_entry = cls._adapter_cache.get(cache_key)
+    #         if cached_entry:
+    #             return cached_entry.data
+
+    #         # 执行 HTTP
+    #         headers = {
+    #             "authorization": f"Bearer {app_token}",
+    #             "X-API-Key": api_key,
+    #             "Content-Type": "application/json",
+    #         }
+    #         data = {"public_key": cls._public_key}
+    #         try:
+    #             response = cls._http_client.post(
+    #                 f"{Config.APP_BASE_URL}/api/adapters", headers=headers, json=data
+    #             )
+    #             response.raise_for_status()
+    #         except requests.RequestException as e:
+    #             logger.error(f"Request failed: {e}")
+    #             return None
+
+    #         try:
+    #             response_data = response.json()
+    #         except ValueError as e:
+    #             logger.error(f"Failed to parse JSON response: {e}")
+    #             return None
+
+    #         result: Dict[str, str] = {}
+    #         try:
+    #             required_fields = ["uid", "url", "mid", "enc"]
+    #             if not all(field in response_data for field in required_fields):
+    #                 raise KeyError("Missing required fields in response")
+
+    #             result["uid"] = response_data["uid"]
+    #             result["url"] = response_data["url"]
+    #             result["mid"] = response_data["mid"]
+
+    #             message_bytes = base64.b64decode(response_data["enc"])  # 加 try
+    #             try:
+    #                 message_decrypted: bytes = cls._private_key.decrypt(
+    #                     message_bytes,
+    #                     padding.OAEP(
+    #                         mgf=padding.MGF1(algorithm=hashes.SHA256()),
+    #                         algorithm=hashes.SHA256(),
+    #                         label=None,
+    #                     ),
+    #                 )
+    #             except ValueError as e:
+    #                 logger.error(f"Decryption failed: {e}")
+    #                 return None
+
+    #             # 加 try decode
+    #             try:
+    #                 result["key"] = message_decrypted.decode("utf-8")
+    #             except UnicodeDecodeError as e:
+    #                 logger.error(f"Key decode failed: {e}")
+    #                 return None
+
+    #             cache_entry = AdapterCacheEntry(
+    #                 data=result, timestamp=time.time(), ttl=Config.LRU_MAX_CACHE_TTL
+    #             )
+    #             cls._adapter_cache.set(cache_key, cache_entry)
+    #             return result
+    #         except KeyError as e:
+    #             logger.error(f"Missing key in response data: {e}")
+    #             return None
+    #         except Exception as e:
+    #             logger.error(f"Error processing adapter response: {e}")
+    #             return None
+
+    # @classmethod
+    # def cleanup_cache(cls):
+    #     cls._adapter_cache.clear_expired()
+    #     # 清理旧锁 (可选, 定期)
+    #     if len(cls._exchange_locks) > Config.LRU_MAX_CACHE_SIZE * 2:
+    #         cls._exchange_locks.clear()
+
+
+def request_source_api():
+    pass
 
 
 class StatusReporter:
     _request_counter: ThreadSafeCounter = ThreadSafeCounter()
 
     @classmethod
-    @retry()
     def upload(cls, http_client: HTTPClient) -> bool:
         if not all(
             [Config.APP_BASE_URL, Config.PROXY_SERVER_URL, Config.PROXY_SERVER_ID]
@@ -533,10 +597,8 @@ class OptimizedScheduler:
     _next_token_rotation: float = (
         time.time() + Config.SCHEDULE_TOKEN_ROTATION_INTERVAL * 60
     )
-    _next_status_report: float = (
-        time.time() + Config.SCHEDULE_STATUS_REPORT_INTERVAL * 60
-    )  # 改: 延迟首次
-    _next_cache_cleanup: float = time.time() + Config.CLEANUP_INTERVAL
+    _next_status_report: float = 0
+    _next_cache_cleanup: float = time.time() + Config.SCHEDULE_CLEANUP_INTERVAL * 60
 
     _http_client: HTTPClient = HTTPClient()
 
@@ -554,7 +616,7 @@ class OptimizedScheduler:
             )
             cls._thread = threading.Thread(target=cls._run_scheduler, daemon=True)
             cls._thread.start()
-            atexit.register(cls.stop)  # 新增: 自动 shutdown
+            atexit.register(cls.stop)
 
     @classmethod
     def stop(cls):
@@ -565,12 +627,12 @@ class OptimizedScheduler:
             if cls._thread:
                 cls._thread.join(timeout=5)
             if cls._executor:
-                cls._executor.shutdown(wait=True)  # 改: wait=True
+                cls._executor.shutdown(wait=True)
             cls._http_client.close()
 
     @classmethod
     def _run_scheduler(cls):
-        import heapq  # 新增: 精确定时
+        import heapq
 
         events = [  # heap of (time, task_func, args)
             (cls._next_token_rotation, cls._run_token_rotation, ()),
@@ -585,10 +647,10 @@ class OptimizedScheduler:
                 while events and events[0][0] <= now:
                     event_time, task, args = heapq.heappop(events)
                     if cls._running:
-                        future = cls._executor.submit(task, *args)
+                        future = cls._executor.submit(task, *args)  # type: ignore
                         future.add_done_callback(
                             lambda f: logger.debug(f"Task {task.__name__} completed")
-                        )  # 监控
+                        )
 
                     # 重新调度
                     if task == cls._run_token_rotation:
@@ -596,7 +658,7 @@ class OptimizedScheduler:
                     elif task == cls._run_status_report:
                         new_time = now + Config.SCHEDULE_STATUS_REPORT_INTERVAL * 60
                     else:  # cleanup
-                        new_time = now + Config.CLEANUP_INTERVAL
+                        new_time = now + Config.SCHEDULE_CLEANUP_INTERVAL * 60
                     heapq.heappush(events, (new_time, task, args))
 
                 if events:
@@ -609,14 +671,11 @@ class OptimizedScheduler:
                 logger.error(f"Scheduler error: {e}")
                 time.sleep(10)  # 退避
 
-    # 分离任务方法 (便于 submit)
     @classmethod
-    @retry()
     def _run_token_rotation(cls):
         TokenRotator.rotate(cls._http_client)
 
     @classmethod
-    @retry()
     def _run_status_report(cls):
         StatusReporter.upload(cls._http_client)
 
@@ -633,10 +692,10 @@ class FlexiProxyCustomHandler(CustomLogger):
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
         OptimizedScheduler.start()
-        super().__init__()
+        super().__init__()  # type: ignore
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        logger.info("Request success")  # 改: 用 logger
+        logger.info("Request success")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
         logger.error("Request failure")
@@ -666,14 +725,13 @@ class FlexiProxyCustomHandler(CustomLogger):
             "mcp_call",
         ],
     ):
-        # 保持原逻辑，但加 async 兼容 (exchange 同步，但短)
         if "secret_fields" not in data:
             return '"[secret_fields] field not found in data"'
 
         if "raw_headers" not in data["secret_fields"]:
             return '"[raw_headers] field not found in data["secret_fields"]"'
 
-        raw_headers: Optional[dict] = data["secret_fields"].get("raw_headers")
+        raw_headers: Optional[dict] = data["secret_fields"]["raw_headers"]
         if raw_headers is None:
             return '"[raw_headers] field is invalid"'
 
@@ -684,14 +742,13 @@ class FlexiProxyCustomHandler(CustomLogger):
         elif (
             "authorization" in raw_headers
             and isinstance(raw_headers["authorization"], str)
-            and raw_headers["authorization"].startswith("Bearer ")
+            and str(raw_headers["authorization"]).startswith("Bearer ")
         ):
             client_api_key = raw_headers["authorization"][7:]
 
         if client_api_key is None:
             return '"Client API key not found in headers"'
 
-        # exchange (同步，但加 timeout? LiteLLM 可处理)
         response = KeyPairLoader.exchange(
             api_key=client_api_key, app_token=TokenRotator.token()
         )
