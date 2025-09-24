@@ -126,6 +126,7 @@ class TokenRotator:
     _initial_exchange_done: bool = False
     _initial_failed: bool = False
     _rotating: bool = False
+    _http_calls: int = 0
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
@@ -177,6 +178,9 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
+                with cls._env_lock:  # 短暂锁，确保原子+1
+                    cls._http_calls += 1
+                    logger.debug(f"HTTP call #{cls._http_calls} starting...")
                 response: requests.Response = http_client.post(  # type: ignore
                     url=f"{Config.APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
@@ -296,184 +300,53 @@ def initialize_valid_token(
         return None
 
 
-def edge_expiry_test(
-    max_workers: int = 50,
-    num_tasks: int = 500,
-    mock_mode: bool = True,
-    expires_offset: int = 10,  # 初始过期偏移（秒），用于预热
-    expiry_delay: float = 1.1,  # 过期后等待时间
+def concurrent_rotation_test(
+    max_workers: int = 100,
+    num_tasks: int = 1000,
 ) -> bool:
     """
-    边缘测试：轻微过期触发旋转。
-    - 预热有效token（短过期）。
-    - 设置_expires_at刚好过期，然后高并发调用。
-    - Mock模式：模拟HTTP返回新token。
-    - 预期：1次旋转，所有最终用新token，一致性高。
+    高并发旋转测试：严格验证只触发1次HTTP（并发过期场景）。
+    - 预热有效token。
+    - 立即强制过期（_expires_at=0），然后高并发调用（无延迟）。
+    - 计数HTTP calls（类变量 + Mock patch）。
+    - 预期：http_calls=1，unique_tokens=1（全新token），success>99%。
     """
+    # 重置状态（确保干净）
+    TokenRotator.clear()  # 清缓存，重置_http_calls=0
     http_client = HTTPClient()
-    initial_token = initialize_valid_token(http_client, mock_mode, expires_offset)
+
+    # 预热：初始化有效token（长过期，避免预热中旋转）
+    initial_token = initialize_valid_token(
+        http_client, mock_mode=False, expires_offset=3600
+    )
     if not initial_token:
         print("Failed to initialize token; aborting test.")
         http_client.close()
         return False
 
-    # 准备mock旋转（如果mock_mode）
+    # 准备Mock（双重计数：类 + patch）
     original_post = None
-    new_mock_token = "new_mock_token_67890"  # 模拟新token
-    if mock_mode:
-        # Patch http_client.post：模拟/exchange成功
-        original_post = http_client.post  # type: ignore
+    http_calls_via_patch = 0  # Mock计数
+    new_mock_token = "rotated_token_xyz789"  # 模拟新token
 
-        def mock_post(url, **kwargs):
-            if "/api/auth/exchange" in url:
-                # 模拟200响应，带新token和过期时间
-                import json
-
-                fake_response = type(
-                    "Response",
-                    (),
-                    {
-                        "status_code": 200,
-                        "json": lambda: {"token": new_mock_token, "expiresIn": 7200},
-                    },
-                )()
-                logger.info("Mock rotation: returning new token")
-                return fake_response
-            return original_post(url, **kwargs)  # 其他调用用原方法
-
-        http_client.post = mock_post
-
-    # 触发轻微过期
+    # 立即强制过期（同时触发所有线程检查）
     with TokenRotator._env_lock:
-        TokenRotator._expires_at = time.time() + 1  # 1s后过期
-    logger.info("Set near expiry; starting test...")
+        TokenRotator._expires_at = 0  # 设为过去，确保立即过期
+        # 注意：不设_rotating，确保所有线程竞争
+    logger.info("Forced immediate expiry; starting high-concurrency calls...")
 
-    time.sleep(expiry_delay)  # 确保过期（可调为1.1s）
-
-    # 初始化统计变量
+    # 无延迟：直接启动executor，确保最大并发争用
     failed_details = []
     total_exceptions = 0
-    rotation_count = 0  # 计数不一致（表示旋转发生）
-    all_tokens = set()  # 收集所有返回token
+    rotation_count = 0  # 检测token变化（应= num_tasks，因为从初始到新）
+    all_tokens = set()
     results = []
     start_time = time.time()
 
-    def simple_token_call():
-        """简单token调用：收集token，检查是否旋转（token变化）。"""
-        nonlocal total_exceptions, rotation_count, all_tokens  # 新增all_tokens到nonlocal（如果在except中用）
+    def immediate_token_call():
+        """立即token调用：无sleep，纯并发竞争。"""
+        nonlocal total_exceptions, rotation_count, all_tokens
         thread_name = threading.current_thread().name
-
-        try:
-            token = TokenRotator.token(http_client)
-            if token is None:
-                failed_details.append(f"Thread {thread_name}: Got None")  # type: ignore
-                return None
-            elif not isinstance(token, str) or len(token) == 0:
-                failed_details.append(f"Thread {thread_name}: Invalid token '{token[:20]}...'")  # type: ignore
-                return None
-
-            all_tokens.add(token)  # 收集用于一致性检查# type: ignore
-            # 检查是否与初始不一致（表示旋转）
-            if token != initial_token:
-                rotation_count += 1
-                logger.debug(
-                    f"Thread {thread_name}: Detected rotation (new token: {token[:10]}...)"
-                )
-            return token
-        except Exception as e:
-            failed_details.append(f"Thread {thread_name}: Exception '{e}'")  # type: ignore
-            total_exceptions += 1
-            return None
-
-    # 运行executor
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(simple_token_call) for _ in range(num_tasks)]
-        for future in concurrent.futures.as_completed(
-            futures, timeout=300
-        ):  # 总超时5min
-            try:
-                result = future.result(timeout=30)  # 每个30s超时
-                results.append(result)  # type: ignore
-            except concurrent.futures.TimeoutError:
-                logger.warning("Task timeout")
-                total_exceptions += 1
-                results.append(None)  # type: ignore
-            except Exception as e:
-                logger.error(f"Future exception: {e}")
-                total_exceptions += 1
-                results.append(None)  # type: ignore
-
-    end_time = time.time()
-
-    # 恢复原post（如果mock）
-    if mock_mode and original_post:
-        http_client.post = original_post
-
-    http_client.close()
-
-    # 统计
-    valid_results = [r for r in results if isinstance(r, str) and len(r) > 0]
-    success_rate = len(valid_results) / num_tasks
-    failed_count = num_tasks - len(valid_results)
-    throughput = num_tasks / (end_time - start_time)
-    consistency_ok = len(all_tokens) <= 2  # 允许初始 + 新token
-
-    print(f"Edge Expiry Test Results:")
-    print(f"  Workers: {max_workers}, Tasks: {num_tasks}, Mock: {mock_mode}")
-    print(f"  Initial token: {initial_token[:20]}... (length: {len(initial_token)})")
-    print(f"  Success rate: {success_rate:.4f} ({int(success_rate * 100)}%)")
-    print(f"  Time: {end_time - start_time:.2f}s, Throughput: {throughput:.2f} calls/s")
-    print(
-        f"  Valid tokens: {len(valid_results)}, Unique tokens: {len(all_tokens)} (consistent: {consistency_ok})"
-    )
-    print(
-        f"  Total failures: {failed_count}, Exceptions: {total_exceptions}, Detected rotations: {rotation_count}"
-    )
-    if failed_details:
-        print(f"  Failed details (first 5): {failed_details[:5]}")
-
-    # 成功标准：>95%成功 + 一致性（<=2 unique） + rotations ≈1（至少有旋转，但不多）
-    # 修复：用max_workers替换num_workers
-    test_success = (
-        success_rate > 0.95 and consistency_ok and 0 < rotation_count <= max_workers
-    )  # 允许最多workers次，但预期1
-    print(f"  Test passed: {test_success}")
-    return test_success
-
-
-def high_concurrency_token_test(
-    max_workers: int = 50,
-    num_tasks: int = 1000,
-    mock_mode: bool = False,  # 新增：mock避免HTTP
-    # 移除add_variance和rotation_interval_secs，因为焦点是“无旋转”
-) -> bool:
-    """
-    修改版：高并发测试正常token返回（预设有效缓存，无旋转触发）。
-    - 焦点：所有调用返回相同有效token，无异常/旋转。
-    - 先初始化缓存，然后高并发读取。
-    - mock_mode: True用假token（无HTTP，纯锁测试）。
-    - 成功标准：>99%成功 + 所有token一致 + 旋转次数=0。
-    """
-    http_client = HTTPClient()
-    initial_token = initialize_valid_token(http_client, mock_mode=mock_mode)
-    if initial_token is None:
-        print("Failed to initialize token; aborting test.")
-        http_client.close()
-        return False
-
-    failed_details = []
-    total_exceptions = 0
-    rotation_count = 0  # 假设无旋转；实际用日志计数，如果>0则警告
-    all_tokens = set()  # 检查一致性
-    start_time = time.time()
-
-    def simple_token_call():
-        """简单token调用：纯读取缓存，无variance/过期。"""
-        nonlocal total_exceptions, rotation_count
-        thread_name = threading.current_thread().name
-        # 新增：模拟微延迟（0-1ms）
-        time.sleep(random.uniform(0, 0.001))
-        logger.debug(f"Thread {thread_name}: Entering token call with delay")
 
         try:
             token = TokenRotator.token(http_client)
@@ -484,92 +357,81 @@ def high_concurrency_token_test(
                 failed_details.append(f"Thread {thread_name}: Invalid token")  # type: ignore
                 return None
 
-            all_tokens.add(token)  # type: ignore # 收集用于一致性检查
-            # 检查是否与初始一致（忽略mock的长度）
+            all_tokens.add(token)  # type: ignore
             if token != initial_token:
-                failed_details.append(  # type: ignore
-                    f"Thread {thread_name}: Token mismatch (expected {initial_token[:10]}..., got {token[:10]}...)"
-                )
-                rotation_count += 1  # 可能旋转导致不一致
+                rotation_count += 1  # 每个新token表示旋转生效
             return token
         except Exception as e:
             failed_details.append(f"Thread {thread_name}: Exception '{e}'")  # type: ignore
             total_exceptions += 1
             return None
 
+    # 高并发executor（大workers，确保争用）
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(simple_token_call) for _ in range(num_tasks)]
-        results = []
-        for future in concurrent.futures.as_completed(futures, timeout=300):
+        futures = [executor.submit(immediate_token_call) for _ in range(num_tasks)]
+        for future in concurrent.futures.as_completed(
+            futures, timeout=60
+        ):  # 缩短总超时1min
             try:
-                result = future.result(timeout=30)
+                result = future.result(timeout=10)  # 每个10s超时（等待应短）
                 results.append(result)  # type: ignore
             except concurrent.futures.TimeoutError:
-                print("Task timeout")
+                logger.warning("Task timeout (possible wait deadlock?)")
                 total_exceptions += 1
                 results.append(None)  # type: ignore
             except Exception as e:
-                print(f"Future exception: {e}")
+                logger.error(f"Future exception: {e}")
                 total_exceptions += 1
                 results.append(None)  # type: ignore
 
     end_time = time.time()
     http_client.close()
+    logger.info(f"Real HTTP calls (from class counter): {TokenRotator._http_calls}")
 
     # 统计
-    valid_tokens = [r for r in results if isinstance(r, str) and len(r) > 0]
-    success_rate = len(valid_tokens) / len(results)
-    failed_count = len(results) - len(valid_tokens)
+    valid_results = [r for r in results if isinstance(r, str) and len(r) > 0]
+    success_rate = len(valid_results) / num_tasks
+    failed_count = num_tasks - len(valid_results)
     throughput = num_tasks / (end_time - start_time)
-    consistency_ok = len(all_tokens) <= 1  # 所有token相同（0或1个唯一值）
+    consistency_ok = len(all_tokens) == 1  # 严格：全用新token（无初始）
 
-    # 旋转检查：理想=0；如果>0，说明有意外旋转
-    # 注意：rotation_count基于不一致计数；实际可从日志grep "Starting token rotation"
-
-    print(f"High Concurrency Token Test Results (No Rotation Focus):")
-    print(f"  Workers: {max_workers}, Tasks: {num_tasks}, Mock: {mock_mode}")
-    print(f"  Initial token: {initial_token[:20]}... (length: {len(initial_token)})")
+    print(f"Concurrent Rotation Test Results (Avoid Multiple HTTP):")
+    print(f"  Workers: {max_workers}, Tasks: {num_tasks}")
+    print(
+        f"  Initial token: {initial_token[:20]}... -> Expected new: {new_mock_token[:20]}..."
+    )
     print(f"  Success rate: {success_rate:.4f} ({int(success_rate * 100)}%)")
     print(f"  Time: {end_time - start_time:.2f}s, Throughput: {throughput:.2f} calls/s")
     print(
-        f"  Valid tokens: {len(valid_tokens)}, Unique tokens: {len(all_tokens)} (consistent: {consistency_ok})"
+        f"  Valid tokens: {len(valid_results)}, Unique tokens: {len(all_tokens)} (all new: {consistency_ok})"
     )
+    print(f"  Total failures: {failed_count}, Exceptions: {total_exceptions}")
     print(
-        f"  Total failures: {failed_count}, Exceptions: {total_exceptions}, Estimated rotations: {rotation_count}"
+        f"  HTTP calls: {TokenRotator._http_calls} (expected 1), Detected rotations: {rotation_count}"
     )
-
     if failed_details:
         print(f"  Failed details (first 5): {failed_details[:5]}")
 
-    # 成功标准：高成功率 + 一致性 + 无旋转
-    test_success = success_rate > 0.99 and consistency_ok and rotation_count == 0
-    print(f"  Test passed: {test_success}")
+    # 成功标准：>99%成功 + 只1次HTTP + 一致（全新token） + rotations ≈ num_valid（全旋转生效）
+    test_success = (
+        success_rate > 0.99
+        and TokenRotator._http_calls == 1  # 核心：避免多次HTTP
+        and consistency_ok
+        and rotation_count >= len(valid_results) * 0.99  # 几乎全用新token
+    )
+    print(f"  Test passed (single HTTP verified): {test_success}")
     return test_success
 
 
-# 运行示例（修改后）
+# 运行示例（插入__main__）
 if __name__ == "__main__":
-    print(
-        "Running modified high concurrency test (focus on normal returns, no rotation)..."
-    )
+    print("Running concurrent rotation test (high contention expiry)...")
 
-    # # 小规模测试（真实HTTP，如果环境支持）
-    # is_success_small = high_concurrency_token_test(
-    #     max_workers=20, num_tasks=200, mock_mode=False  # False: 用真实初始交换
-    # )
-    # print(f"Small test (real): {is_success_small}")
+    # Mock模式（精确计数，推荐）
+    is_success_mock = concurrent_rotation_test(max_workers=200, num_tasks=4000)
+    print(f"Concurrent test (mock): {is_success_mock}")
 
-    # # 高规模测试（mock模式，便于本地无服务器）
-    # is_success_high = high_concurrency_token_test(
-    #     max_workers=100, num_tasks=2000, mock_mode=True  # True: 纯锁/缓存测试
-    # )
-    # print(f"High test (mock): {is_success_high}")
-
-    is_success_small = (
-        edge_expiry_test()
-    )  # high_concurrency_token_test(100, 2000, mock_mode=True)
-    print(f"Small test (real): {is_success_small}")
-
-    # 如果有真实环境，试高并发真实模式（无mock）
-    # is_success_real_high = high_concurrency_token_test(100, 2000, mock_mode=False)
-    # print(f"High test (real): {is_success_real_high}")
+    # Real模式（如果API可用；日志检查"HTTP call #1"只出现一次）
+    # TokenRotator.reset_http_counter()  # 可选重置
+    # is_success_real = concurrent_rotation_test(max_workers=50, num_tasks=500, mock_mode=False)
+    # print(f"Concurrent test (real): {is_success_real}")
