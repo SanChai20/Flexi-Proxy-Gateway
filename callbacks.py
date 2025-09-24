@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Dict, Literal, Optional, OrderedDict
+from typing import Any, Dict, Literal, Optional, OrderedDict
 
 import requests
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.proxy_server import UserAPIKeyAuth
+from litellm.types.utils import LLMResponseTypes
 from requests.adapters import HTTPAdapter
 from urllib3 import Retry
 
@@ -546,6 +547,14 @@ class FlexiProxyCustomHandler(
         TokenRotator.clear()
 
     #### CALL HOOKS - proxy only ####
+
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: LLMResponseTypes,
+    ) -> Any:
+        pass
 
     async def async_pre_call_hook(
         self,
