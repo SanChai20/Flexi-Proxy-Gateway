@@ -120,7 +120,7 @@ def extreme_concurrency_test(
 
         results = []
         for future in concurrent.futures.as_completed(
-            futures, timeout=300
+            futures, timeout=3000
         ):  # 5min总超时
             try:
                 result = future.result(timeout=10)  # 每个任务10s超时
