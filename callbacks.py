@@ -7,7 +7,6 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
 from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -65,21 +64,8 @@ class Config:
     PROXY_SERVER_ADVANCED = int(os.getenv("PROXY_SERVER_ADVANCED", "0"))
     PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
 
-    # Scheduler
-    SCHEDULE_TOKEN_ROTATION_INTERVAL = int(
-        os.getenv("SCHEDULE_TOKEN_ROTATION_INTERVAL", "10")
-    )
-    SCHEDULE_STATUS_REPORT_INTERVAL = int(
-        os.getenv("SCHEDULE_STATUS_REPORT_INTERVAL", "30")
-    )
-    SCHEDULE_CLEANUP_INTERVAL = int(os.getenv("SCHEDULE_CLEANUP_INTERVAL", "60"))
-
-    # Thread
-    MAX_WORKERS = int(os.getenv("MAX_WORKERS", "8"))
-
     # LRU Cache
     LRU_MAX_CACHE_SIZE = int(os.getenv("LRU_MAX_CACHE_SIZE", "500"))
-    LRU_MAX_CACHE_TTL = int(os.getenv("LRU_MAX_CACHE_TTL", "1800"))
 
     # Http related
     HTTP_CONNECT_TIMEOUT_LIMIT = int(os.getenv("HTTP_CONNECT_TIMEOUT_LIMIT", "8"))
@@ -90,9 +76,6 @@ class Config:
         os.getenv("HTTP_MAX_POOL_CONNECTIONS_COUNT", "10")
     )
     HTTP_RETRY_BACKOFF = float(os.getenv("HTTP_RETRY_BACKOFF", "0.5"))
-
-    # Others
-    STATUS_REPORT_EXPIRES = int(os.getenv("STATUS_REPORT_EXPIRES", "7200"))
 
 
 class TimestampedLRUCache(LRUCache[str, dict[str, str]]):
@@ -255,7 +238,6 @@ class TokenRotator:
                     data={
                         "url": Config.PROXY_SERVER_URL,
                         "status": ProxyRequestCounter.status(),
-                        "ex": Config.STATUS_REPORT_EXPIRES,
                         "adv": Config.PROXY_SERVER_ADVANCED == 1,
                         "id": Config.PROXY_SERVER_ID,
                     },
