@@ -79,7 +79,7 @@ class Config:
 
 
 class TimestampedLRUCache(LRUCache[str, dict[str, str]]):
-    _last_used: dict[str, float] = {}  # key - timestamp
+    _last_used: dict[str, float] = {}
 
     def __init__(self, maxsize, getsizeof=None):
         super().__init__(maxsize, getsizeof)
@@ -203,8 +203,8 @@ class TokenRotator:
                             "Background refresher: token nearing expiry, rotating..."
                         )
                         cls.token(http_client)
-                    except Exception as e:
-                        logger.error(f"Background token refresh failed: {e}")
+                    except Exception:
+                        logger.error("Background token refresh failed")
 
         t = threading.Thread(target=_refresher, daemon=True)
         t.start()
@@ -270,8 +270,8 @@ class TokenRotator:
                 if response.status_code == 200:
                     try:
                         data = response.json()
-                    except ValueError as e:
-                        logger.error(f"Failed to parse token response JSON: {e}")
+                    except ValueError:
+                        logger.error("Failed to parse token response JSON")
                         raise  # Treat as failure
 
                     new_token = data.get("token")
@@ -282,24 +282,18 @@ class TokenRotator:
                         new_expires_at = (
                             time.time() + expires_in - 300
                         )  # 5-minute buffer
-                        logger.info(
-                            f"Token rotated successfully, expires in {expires_in}s"
-                        )
+                        logger.info("Token rotated successfully")
                     else:
-                        logger.error(
-                            "Token response missing 'token' or 'expiresIn' field"
-                        )
+                        logger.error("Token response missing field")
                         raise  # Treat as failure
                 else:
                     logger.error(f"Token rotate failed: {response.status_code}")
                     raise  # Treat as failure
 
-            except (
-                requests.RequestException
-            ) as e:  # Adjust exception if HTTPClient differs
-                logger.error(f"Token rotate request failed: {e}")
-            except Exception as e:
-                logger.error(f"Unexpected error in token rotate: {e}")
+            except requests.RequestException:  # Adjust exception if HTTPClient differs
+                logger.error("Token rotate request failed")
+            except Exception:
+                logger.error("Unexpected error in token rotate")
 
             # Update state after exchange attempt
             with cls._env_lock:
@@ -363,8 +357,8 @@ class KeyPairLoader:
                 ),
             )
             return message_decrypted.decode("utf-8")
-        except Exception as e:
-            logger.error(f"Decrypt failed: {e}")
+        except Exception:
+            logger.error("Decrypt failed")
             return None
 
     @classmethod
@@ -390,15 +384,15 @@ class KeyPairLoader:
             )
 
             if not isinstance(private_key, rsa.RSAPrivateKey):
-                raise TypeError(f"Expected RSAPrivateKey, got {type(private_key)}")
+                raise TypeError("Expected RSAPrivateKey")
 
             cls._private_key = private_key
             cls._public_key = public_pem_bytes.decode("utf-8")
             logger.info("Keys Correctly Loaded")
             return True
 
-        except Exception as e:
-            logger.error(f"Key loading failed: {e}")
+        except Exception:
+            logger.error("Key loading failed")
             return False
 
     @classmethod
@@ -455,11 +449,11 @@ class FlexiProxyCustomHandler(CustomLogger):
         ],
     ):
         if "secret_fields" not in data:
-            logger.error('"secret_fields" field not found in data')
+            logger.error('"secret_fields" field missing')
             return PreCallResponse.COMPATIBILITY
 
         if "raw_headers" not in data["secret_fields"]:
-            logger.error('"raw_headers" field not found in data["secret_fields"]')
+            logger.error('"raw_headers" field missing')
             return PreCallResponse.COMPATIBILITY
 
         raw_headers: Optional[dict] = data["secret_fields"]["raw_headers"]
@@ -501,14 +495,14 @@ class FlexiProxyCustomHandler(CustomLogger):
                     data={"public_key": KeyPairLoader.public_key()},
                 )
                 response.raise_for_status()
-            except requests.RequestException as e:
-                logger.error(f"Request failed: {e}")
+            except requests.RequestException:
+                logger.error("Request failed")
                 return PreCallResponse.INTERNAL
 
             try:
                 response_data = response.json()
-            except ValueError as e:
-                logger.error(f"Failed to parse JSON response: {e}")
+            except ValueError:
+                logger.error("Failed to parse JSON response")
                 return PreCallResponse.INTERNAL
 
             result: dict[str, str] = {}
@@ -532,16 +526,16 @@ class FlexiProxyCustomHandler(CustomLogger):
                         logger.error("Decryption failed")
                         return PreCallResponse.INTERNAL
                     result["key"] = message_decrypted
-                except ValueError as e:
-                    logger.error(f"Decryption failed: {e}")
+                except ValueError:
+                    logger.error("Decryption failed")
                     return PreCallResponse.INTERNAL
 
                 self._api_cache[cached_key] = cached_entry = result
-            except KeyError as e:
-                logger.error(f"Missing key in response data: {e}")
+            except KeyError:
+                logger.error("Missing key in response data")
                 return PreCallResponse.INTERNAL
-            except Exception as e:
-                logger.error(f"Error processing adapter response: {e}")
+            except Exception:
+                logger.error("Error processing adapter response")
                 return PreCallResponse.INTERNAL
 
         if cached_entry is None:
