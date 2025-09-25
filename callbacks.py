@@ -186,9 +186,7 @@ class TokenRotator:
         raise TypeError(f"{cls.__name__} may not be instantiated")
 
     @classmethod
-    def background_refresh(cls, interval: int = 60):
-        http_client = HTTPClient()
-
+    def background_refresh(cls, http_client: "HTTPClient", interval: int = 60):
         def _refresher():
             while True:
                 time.sleep(interval)
@@ -416,8 +414,8 @@ class FlexiProxyCustomHandler(CustomLogger):
         super().__init__(False)  # type: ignore # TODO...
         self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
-        # Prewarm
-        TokenRotator.token(self._http_client)
+        # Start background refresh
+        TokenRotator.background_refresh(self._http_client)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
