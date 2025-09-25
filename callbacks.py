@@ -42,7 +42,7 @@ console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
 
 # level
-root_logger.setLevel(logging.DEBUG)  # TODO...
+root_logger.setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
 
@@ -413,11 +413,11 @@ class FlexiProxyCustomHandler(CustomLogger):
     _api_cache: "TimestampedLRUCache"
 
     def __init__(self):
-        super().__init__(False)  # type: ignore # TODO...
+        super().__init__(True)  # type: ignore
         self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
-        TokenRotator.background_refresh(self._http_client, 10)
+        TokenRotator.background_refresh(self._http_client, 30)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
