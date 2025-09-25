@@ -502,124 +502,15 @@ def request():
     pass
 
 
-class StatusReporter:
-    _request_counter: ThreadSafeCounter = ThreadSafeCounter()
-
-    @classmethod
-    def update(cls):
-        cls._request_counter.increment()
-
-
-class OptimizedScheduler:
-    """Stable-first scheduler"""
-
-    _running: bool = False
-    _thread: Optional[threading.Thread] = None
-    _executor: Optional[ThreadPoolExecutor] = None
-    _lock = threading.Lock()  # 新增: 保护启动/停止
-
-    _next_token_rotation: float = (
-        time.time() + Config.SCHEDULE_TOKEN_ROTATION_INTERVAL * 60
-    )
-    _next_status_report: float = 0
-    _next_cache_cleanup: float = time.time() + Config.SCHEDULE_CLEANUP_INTERVAL * 60
-
-    _http_client: HTTPClient = HTTPClient()
-
-    def __new__(cls, *args, **kwargs):
-        raise TypeError(f"{cls.__name__} may not be instantiated")
-
-    @classmethod
-    def start(cls):
-        with cls._lock:
-            if cls._running:
-                return
-            cls._running = True
-            cls._executor = ThreadPoolExecutor(
-                max_workers=Config.MAX_WORKERS, thread_name_prefix="Scheduler"
-            )
-            cls._thread = threading.Thread(target=cls._run_scheduler, daemon=True)
-            cls._thread.start()
-            atexit.register(cls.stop)
-
-    @classmethod
-    def stop(cls):
-        with cls._lock:
-            if not cls._running:
-                return
-            cls._running = False
-            if cls._thread:
-                cls._thread.join(timeout=5)
-            if cls._executor:
-                cls._executor.shutdown(wait=True)
-            cls._http_client.close()
-
-    @classmethod
-    def _run_scheduler(cls):
-        import heapq
-
-        events = [  # heap of (time, task_func, args)
-            (cls._next_token_rotation, cls._run_token_rotation, ()),
-            (cls._next_status_report, cls._run_status_report, ()),
-            (cls._next_cache_cleanup, cls._run_cache_cleanup, ()),
-        ]
-        heapq.heapify(events)
-
-        while cls._running:
-            try:
-                now = time.time()
-                while events and events[0][0] <= now:
-                    event_time, task, args = heapq.heappop(events)
-                    if cls._running:
-                        future = cls._executor.submit(task, *args)  # type: ignore
-                        future.add_done_callback(
-                            lambda f: logger.debug(f"Task {task.__name__} completed")
-                        )
-
-                    # 重新调度
-                    if task == cls._run_token_rotation:
-                        new_time = now + Config.SCHEDULE_TOKEN_ROTATION_INTERVAL * 60
-                    elif task == cls._run_status_report:
-                        new_time = now + Config.SCHEDULE_STATUS_REPORT_INTERVAL * 60
-                    else:  # cleanup
-                        new_time = now + Config.SCHEDULE_CLEANUP_INTERVAL * 60
-                    heapq.heappush(events, (new_time, task, args))
-
-                if events:
-                    sleep_time = events[0][0] - now
-                    time.sleep(max(0, sleep_time))
-                else:
-                    time.sleep(10)  # 防止空转
-
-            except Exception as e:
-                logger.error(f"Scheduler error: {e}")
-                time.sleep(10)  # 退避
-
-    @classmethod
-    def _run_token_rotation(cls):
-        TokenRotator.rotate(cls._http_client)
-
-    @classmethod
-    def _run_status_report(cls):
-        StatusReporter.upload(cls._http_client)
-
-    @classmethod
-    def _run_cache_cleanup(cls):
-        KeyPairLoader.cleanup_cache()
-
-
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
-    _request_counter: ThreadSafeCounter
 
     def __init__(self):
+        super().__init__()
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
-        OptimizedScheduler.start()
-        super().__init__()
-        self._request_counter = ThreadSafeCounter()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         logger.info("Request success")
@@ -689,16 +580,13 @@ class FlexiProxyCustomHandler(CustomLogger):
 
         ProxyRequestCounter.increment()
 
-        return None  # 成功返回 None (LiteLLM 修改 data)
+        return data
 
 
-# 全局实例 (但 LiteLLM 可能创建新，OK)
 proxy_handler_instance = FlexiProxyCustomHandler()
 
 
-# 全局 shutdown (atexit 已注册，但额外)
 def shutdown():
-    OptimizedScheduler.stop()
     KeyPairLoader.unload()
     TokenRotator.clear()
 
