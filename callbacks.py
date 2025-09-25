@@ -1,18 +1,17 @@
 from __future__ import annotations
 
-import atexit  # 新增: 用于 shutdown
+import atexit
 import base64
 import logging
 import os
 import sys
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 import requests
 from cachetools import LRUCache
@@ -150,15 +149,15 @@ class HTTPClient:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
-    def _request(self, method: str, url: str, **kwargs) -> requests.Response:
-        kwargs.setdefault("timeout", self.timeout)  # type: ignore
-        return self.session.request(method, url, **kwargs)
+    def _request(
+        self, method: str, url: str, headers: Any, data: Any
+    ) -> requests.Response:
+        return self.session.request(
+            method, url, timeout=self.timeout, headers=headers, json=data
+        )
 
-    def post(self, url: str, **kwargs) -> requests.Response:
-        return self._request("POST", url, **kwargs)  # type: ignore
-
-    def get(self, url: str, **kwargs) -> requests.Response:
-        return self._request("GET", url, **kwargs)  # type: ignore
+    def post(self, url: str, headers: Any, data: Any) -> requests.Response:
+        return self._request("POST", url, headers, data)
 
     def close(self):
         self.session.close()
@@ -250,10 +249,10 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
-                response: requests.Response = http_client.post(  # type: ignore
+                response: requests.Response = http_client.post(
                     url=f"{Config.APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
-                    json={
+                    data={
                         "url": Config.PROXY_SERVER_URL,
                         "status": ProxyRequestCounter.status(),
                         "ex": Config.STATUS_REPORT_EXPIRES,
@@ -491,7 +490,7 @@ class FlexiProxyCustomHandler(CustomLogger):
                         "X-API-Key": client_api_key,
                         "Content-Type": "application/json",
                     },
-                    json={"public_key": KeyPairLoader.public_key()},
+                    data={"public_key": KeyPairLoader.public_key()},
                 )
                 response.raise_for_status()
             except requests.RequestException as e:
