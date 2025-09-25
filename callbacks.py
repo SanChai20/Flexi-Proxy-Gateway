@@ -42,7 +42,7 @@ console_handler.setFormatter(formatter)
 root_logger.addHandler(console_handler)
 
 # level
-root_logger.setLevel(logging.INFO)
+root_logger.setLevel(logging.DEBUG)  # TODO...
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,30 @@ class TokenRotator:
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
+
+    @classmethod
+    def background_refresh(cls, interval: int = 60):
+        http_client = HTTPClient()
+
+        def _refresher():
+            while True:
+                time.sleep(interval)
+                should_refresh = False
+                with cls._env_lock:
+                    now = time.time()
+                    if cls._expires_at and now > cls._expires_at - 600:  # 10分钟窗口
+                        should_refresh = True
+                if should_refresh:
+                    try:
+                        logger.debug(
+                            "Background refresher: token nearing expiry, rotating..."
+                        )
+                        cls.token(http_client)
+                    except Exception as e:
+                        logger.error(f"Background token refresh failed: {e}")
+
+        t = threading.Thread(target=_refresher, daemon=True)
+        t.start()
 
     @classmethod
     def token(cls, http_client: "HTTPClient") -> Optional[str]:
@@ -389,9 +413,11 @@ class FlexiProxyCustomHandler(CustomLogger):
     _api_cache: "TimestampedLRUCache"
 
     def __init__(self):
-        super().__init__(False)  # type: ignore
+        super().__init__(False)  # type: ignore # TODO...
         self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
+        # Prewarm
+        TokenRotator.token(self._http_client)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
