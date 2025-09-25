@@ -9,6 +9,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
@@ -46,6 +47,12 @@ root_logger.addHandler(console_handler)
 root_logger.setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
+
+
+class PreCallResponse(Enum):
+    COMPATIBILITY = "Compatibility Issue"
+    AUTHORIZATION = "Authorization Issue"
+    INTERNAL = "Internal Error"
 
 
 class Config:
@@ -92,14 +99,17 @@ class Config:
 class TimestampedLRUCache(LRUCache[str, dict[str, str]]):
     _last_used: dict[str, float] = {}  # key - timestamp
 
-    def __init__(self, maxsize=128, getsizeof=None):
+    def __init__(self, maxsize, getsizeof=None):
         super().__init__(maxsize, getsizeof)
         self._last_used = {}
 
     def __getitem__(self, key):
-        value = super().__getitem__(key)
-        self._last_used[key] = time.time()
-        return value
+        try:
+            value = super().__getitem__(key)
+            self._last_used[key] = time.time()
+            return value
+        except Exception:
+            return None
 
     def __setitem__(self, key, value):
         super().__setitem__(key, value)
@@ -391,122 +401,16 @@ class KeyPairLoader:
         cls._private_key = None
         cls._public_key = None
 
-    # @classmethod
-    # def decrypt(
-    #     cls, api_key: str | None, app_token: str | None
-    # ) -> Optional[Dict[str, str]]:
-    #     # 加锁检查密钥
-    #     with cls._lock:
-    #         if not cls._loaded or cls._public_key is None or cls._private_key is None:
-    #             logger.error("Keys not loaded")
-    #             return None
-
-    #     if not all([Config.APP_BASE_URL, api_key, app_token]):
-    #         logger.error("Invalid request params")
-    #         return None
-
-    #     cache_key = f"{api_key}:{app_token}"
-
-    #     # 先查缓存
-    #     cached_entry = cls._adapter_cache.get(cache_key)
-    #     if cached_entry:
-    #         return cached_entry.data
-
-    #     # Per-key 锁防重复
-    #     if cache_key not in cls._exchange_locks:
-    #         with cls._lock:  # 原子创建锁
-    #             if cache_key not in cls._exchange_locks:
-    #                 cls._exchange_locks[cache_key] = threading.Lock()
-    #     lock = cls._exchange_locks[cache_key]
-
-    #     with lock:
-    #         # 双查缓存 (其他线程可能已填充)
-    #         cached_entry = cls._adapter_cache.get(cache_key)
-    #         if cached_entry:
-    #             return cached_entry.data
-
-    #         # 执行 HTTP
-    #         headers = {
-    #             "authorization": f"Bearer {app_token}",
-    #             "X-API-Key": api_key,
-    #             "Content-Type": "application/json",
-    #         }
-    #         data = {"public_key": cls._public_key}
-    #         try:
-    #             response = cls._http_client.post(
-    #                 f"{Config.APP_BASE_URL}/api/adapters", headers=headers, json=data
-    #             )
-    #             response.raise_for_status()
-    #         except requests.RequestException as e:
-    #             logger.error(f"Request failed: {e}")
-    #             return None
-
-    #         try:
-    #             response_data = response.json()
-    #         except ValueError as e:
-    #             logger.error(f"Failed to parse JSON response: {e}")
-    #             return None
-
-    #         result: Dict[str, str] = {}
-    #         try:
-    #             required_fields = ["uid", "url", "mid", "enc"]
-    #             if not all(field in response_data for field in required_fields):
-    #                 raise KeyError("Missing required fields in response")
-
-    #             result["uid"] = response_data["uid"]
-    #             result["url"] = response_data["url"]
-    #             result["mid"] = response_data["mid"]
-
-    #             message_bytes = base64.b64decode(response_data["enc"])  # 加 try
-    #             try:
-    #                 message_decrypted: bytes = cls._private_key.decrypt(
-    #                     message_bytes,
-    #                     padding.OAEP(
-    #                         mgf=padding.MGF1(algorithm=hashes.SHA256()),
-    #                         algorithm=hashes.SHA256(),
-    #                         label=None,
-    #                     ),
-    #                 )
-    #             except ValueError as e:
-    #                 logger.error(f"Decryption failed: {e}")
-    #                 return None
-
-    #             # 加 try decode
-    #             try:
-    #                 result["key"] = message_decrypted.decode("utf-8")
-    #             except UnicodeDecodeError as e:
-    #                 logger.error(f"Key decode failed: {e}")
-    #                 return None
-
-    #             cache_entry = AdapterCacheEntry(
-    #                 data=result, timestamp=time.time(), ttl=Config.LRU_MAX_CACHE_TTL
-    #             )
-    #             cls._adapter_cache.set(cache_key, cache_entry)
-    #             return result
-    #         except KeyError as e:
-    #             logger.error(f"Missing key in response data: {e}")
-    #             return None
-    #         except Exception as e:
-    #             logger.error(f"Error processing adapter response: {e}")
-    #             return None
-
-    # @classmethod
-    # def cleanup_cache(cls):
-    #     cls._adapter_cache.clear_expired()
-    #     # 清理旧锁 (可选, 定期)
-    #     if len(cls._exchange_locks) > Config.LRU_MAX_CACHE_SIZE * 2:
-    #         cls._exchange_locks.clear()
-
-
-def request():
-    pass
-
 
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
+    _http_client: "HTTPClient"
+    _api_cache: "TimestampedLRUCache"
 
     def __init__(self):
-        super().__init__()
+        super().__init__(False)  # type: ignore
+        self._http_client = HTTPClient()
+        self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
@@ -544,14 +448,17 @@ class FlexiProxyCustomHandler(CustomLogger):
         ],
     ):
         if "secret_fields" not in data:
-            return '"[secret_fields] field not found in data"'
+            logger.error('"secret_fields" field not found in data')
+            return PreCallResponse.COMPATIBILITY
 
         if "raw_headers" not in data["secret_fields"]:
-            return '"[raw_headers] field not found in data["secret_fields"]"'
+            logger.error('"raw_headers" field not found in data["secret_fields"]')
+            return PreCallResponse.COMPATIBILITY
 
         raw_headers: Optional[dict] = data["secret_fields"]["raw_headers"]
         if raw_headers is None:
-            return '"[raw_headers] field is invalid"'
+            logger.error('"raw_headers" field is invalid')
+            return PreCallResponse.COMPATIBILITY
 
         # Extract client API key
         client_api_key = None
@@ -565,21 +472,81 @@ class FlexiProxyCustomHandler(CustomLogger):
             client_api_key = raw_headers["authorization"][7:]
 
         if client_api_key is None:
-            return '"Client API key not found in headers"'
+            logger.error("Client API key not found in headers")
+            return PreCallResponse.AUTHORIZATION
 
-        response = KeyPairLoader.exchange(
-            api_key=client_api_key, app_token=TokenRotator.token()
-        )
-        if response is None:
-            return '"Internal Error: Key exchange failed"'
+        app_token: Optional[str] = TokenRotator.token(self._http_client)
+        if app_token is None:
+            logger.error("App token is invalid")
+            return PreCallResponse.INTERNAL
+
+        cached_key = f"{client_api_key}:{app_token}"
+        cached_entry = self._api_cache[cached_key]
+        if cached_entry is None:
+            try:
+                response: requests.Response = self._http_client.post(
+                    f"{Config.APP_BASE_URL}/api/adapters",
+                    headers={
+                        "authorization": f"Bearer {app_token}",
+                        "X-API-Key": client_api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={"public_key": KeyPairLoader.public_key()},
+                )
+                response.raise_for_status()
+            except requests.RequestException as e:
+                logger.error(f"Request failed: {e}")
+                return PreCallResponse.INTERNAL
+
+            try:
+                response_data = response.json()
+            except ValueError as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                return PreCallResponse.INTERNAL
+
+            result: dict[str, str] = {}
+            try:
+                required_fields = ["uid", "url", "mid", "enc"]
+                if not all(field in response_data for field in required_fields):
+                    logger.error("Missing required fields in response")
+                    return PreCallResponse.INTERNAL
+
+                # result["uid"] = response_data["uid"]
+                result["url"] = response_data["url"]
+                result["mid"] = response_data["mid"]
+
+                message_bytes = base64.b64decode(response_data["enc"])
+
+                try:
+                    message_decrypted: Optional[str] = KeyPairLoader.decrypt(
+                        message_bytes
+                    )
+                    if message_decrypted is None:
+                        logger.error("Decryption failed")
+                        return PreCallResponse.INTERNAL
+                    result["key"] = message_decrypted
+                except ValueError as e:
+                    logger.error(f"Decryption failed: {e}")
+                    return PreCallResponse.INTERNAL
+
+                self._api_cache[cached_key] = cached_entry = result
+            except KeyError as e:
+                logger.error(f"Missing key in response data: {e}")
+                return PreCallResponse.INTERNAL
+            except Exception as e:
+                logger.error(f"Error processing adapter response: {e}")
+                return PreCallResponse.INTERNAL
+
+        if cached_entry is None:
+            logger.error("Failed to retrieve user authorization information")
+            return PreCallResponse.INTERNAL
 
         # Update data
-        data["api_base"] = response["url"]
-        data["api_key"] = response["key"]
-        data["model"] = response["mid"]
+        data["api_base"] = cached_entry["url"]
+        data["api_key"] = cached_entry["key"]
+        data["model"] = cached_entry["mid"]
 
         ProxyRequestCounter.increment()
-
         return data
 
 
