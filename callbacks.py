@@ -193,7 +193,9 @@ class TokenRotator:
                 should_refresh = False
                 with cls._env_lock:
                     now = time.time()
-                    if cls._expires_at and now > cls._expires_at - 600:  # 10分钟窗口
+                    if (
+                        cls._token_cache is None or now > cls._expires_at - 600
+                    ):  # 10分钟窗口
                         should_refresh = True
                 if should_refresh:
                     try:
@@ -415,7 +417,7 @@ class FlexiProxyCustomHandler(CustomLogger):
         self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
-        TokenRotator.background_refresh(self._http_client)
+        TokenRotator.background_refresh(self._http_client, 10)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
