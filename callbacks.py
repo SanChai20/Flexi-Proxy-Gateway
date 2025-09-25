@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Literal, Optional
 
 import requests
+from cachetools import LRUCache
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
@@ -88,88 +89,28 @@ class Config:
     STATUS_REPORT_EXPIRES = int(os.getenv("STATUS_REPORT_EXPIRES", "7200"))
 
 
-@dataclass
-class AdapterCacheEntry:
-    data: Dict[str, str]
-    timestamp: float
-    ttl: int
+class TimestampedLRUCache(LRUCache[str, dict[str, str]]):
+    _last_used: dict[str, float] = {}  # key - timestamp
 
+    def __init__(self, maxsize=128, getsizeof=None):
+        super().__init__(maxsize, getsizeof)
+        self._last_used = {}
 
-class LRUCache:
-    """Thread-safe LRU + TTL Cache"""
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        self._last_used[key] = time.time()
+        return value
 
-    def __init__(self):
-        self._cache: Dict[str, "AdapterCacheEntry"] = {}
-        self._lock = threading.RLock()
-        self._order: list[str] = []  # 简单 LRU 实现（生产用 cachetools）
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        self._last_used[key] = time.time()
 
-    def get(self, key: str) -> Optional["AdapterCacheEntry"]:
-        with self._lock:
-            if key not in self._cache:
-                return None
-            entry = self._cache[key]
-            if time.time() - entry.timestamp > entry.ttl:
-                del self._cache[key]
-                self._order.remove(key)
-                return None
-            # Move to end (LRU)
-            self._order.remove(key)
-            self._order.append(key)
-            return entry
-
-    def set(self, key: str, value: "AdapterCacheEntry"):
-        with self._lock:
-            if key in self._cache:
-                self._order.remove(key)
-            elif len(self._cache) >= Config.LRU_MAX_CACHE_SIZE:
-                old_key = self._order.pop(0)
-                del self._cache[old_key]
-            self._cache[key] = value
-            self._order.append(key)
-
-    def clear_expired(self):
-        with self._lock:
-            now = time.time()
-            expired = [k for k, v in self._cache.items() if now - v.timestamp > v.ttl]
-            for k in expired:
-                del self._cache[k]
-                if k in self._order:
-                    self._order.remove(k)
-
-
-class ThreadSafeCounter:
-    """Thread-safe counter"""
-
-    def __init__(self):
-        self._value = 0
-        self._lock = threading.Lock()
-        self._total = 0  # 新增: 累计总计
-
-    def increment(self) -> int:
-        with self._lock:
-            self._value += 1
-            self._total += 1
-            return self._value
-
-    def get_and_report(
-        self,
-    ) -> tuple[int, float]:  # 改: 返回周期 + 平均 (total / cycles)
-        with self._lock:
-            current = self._value
-            avg = (
-                self._total / max(1, self._report_count)
-                if hasattr(self, "_report_count")
-                else 0
-            )
-            self._value = 0
-            if not hasattr(self, "_report_count"):
-                self._report_count = 0
-            self._report_count += 1
-            return current, avg
-
-    def get(self) -> int:
-        with self._lock:
-            return self._value
+    def popitem(self):
+        lru_key = min(self._last_used, key=lambda k: self._last_used[k])
+        lru_value = super().__getitem__(lru_key)
+        del self._last_used[lru_key]
+        super().pop(lru_key, None)
+        return lru_key, lru_value
 
 
 class HTTPClient:
@@ -211,6 +152,33 @@ class HTTPClient:
 
     def close(self):
         self.session.close()
+
+
+class ProxyRequestCounter:
+
+    _value: int = 0
+    _lock: threading.Lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        raise TypeError(f"{cls.__name__} may not be instantiated")
+
+    @classmethod
+    def increment(cls) -> int:
+        with cls._lock:
+            cls._value += 1
+            return cls._value
+
+    @classmethod
+    def status(cls) -> str:
+        with cls._lock:
+            if cls._value < 100:
+                status: Literal["unavailable", "spare", "busy", "full"] = "spare"
+            elif cls._value < 500:
+                status = "busy"
+            else:
+                status = "full"
+            cls._value = 0
+            return status
 
 
 class TokenRotator:
@@ -275,6 +243,13 @@ class TokenRotator:
                 response: requests.Response = http_client.post(  # type: ignore
                     url=f"{Config.APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
+                    json={
+                        "url": Config.PROXY_SERVER_URL,
+                        "status": ProxyRequestCounter.status(),
+                        "ex": Config.STATUS_REPORT_EXPIRES,
+                        "adv": Config.PROXY_SERVER_ADVANCED == 1,
+                        "id": Config.PROXY_SERVER_ID,
+                    },
                 )
 
                 if response.status_code == 200:
@@ -523,63 +498,12 @@ class KeyPairLoader:
     #         cls._exchange_locks.clear()
 
 
-def request_source_api():
+def request():
     pass
 
 
 class StatusReporter:
     _request_counter: ThreadSafeCounter = ThreadSafeCounter()
-
-    @classmethod
-    def upload(cls, http_client: HTTPClient) -> bool:
-        if not all(
-            [Config.APP_BASE_URL, Config.PROXY_SERVER_URL, Config.PROXY_SERVER_ID]
-        ):
-            logger.error("Missing upload required environment variables")
-            return False
-
-        current_token = TokenRotator.token()
-        if not current_token:
-            logger.error("No current token available")
-            return False
-
-        # 改: 用 get_and_report 获取周期 + 平均
-        period_count, avg_count = cls._request_counter.get_and_report()
-
-        # 基于平均 (累计)
-        if avg_count < 100:
-            status: Literal["unavailable", "spare", "busy", "full"] = "spare"
-        elif avg_count < 500:
-            status = "busy"
-        else:
-            status = "full"
-
-        data = {
-            "url": Config.PROXY_SERVER_URL,
-            "status": status,
-            "ex": Config.STATUS_REPORT_EXPIRES,
-            "adv": Config.PROXY_SERVER_ADVANCED == 1,
-            "avg_requests": avg_count,  # 新增: 上报平均
-        }
-        headers = {
-            "Authorization": f"Bearer {current_token}",
-            "Content-Type": "application/json",
-        }
-        try:
-            response = http_client.post(
-                f"{Config.APP_BASE_URL}/api/providers/{Config.PROXY_SERVER_ID}",
-                json=data,
-                headers=headers,
-            )
-            response.raise_for_status()
-            logger.info("Status update succeed.")
-            return True
-        except requests.RequestException as e:
-            logger.error(f"Status update failed: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected status update error: {e}")
-            return False
 
     @classmethod
     def update(cls):
@@ -686,13 +610,16 @@ class OptimizedScheduler:
 
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
+    _request_counter: ThreadSafeCounter
+
     def __init__(self):
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
         OptimizedScheduler.start()
-        super().__init__()  # type: ignore
+        super().__init__()
+        self._request_counter = ThreadSafeCounter()
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         logger.info("Request success")
@@ -760,8 +687,7 @@ class FlexiProxyCustomHandler(CustomLogger):
         data["api_key"] = response["key"]
         data["model"] = response["mid"]
 
-        # Update counter (异步安全)
-        StatusReporter.update()
+        ProxyRequestCounter.increment()
 
         return None  # 成功返回 None (LiteLLM 修改 data)
 
