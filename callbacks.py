@@ -10,7 +10,7 @@ import time
 from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Tuple
 
 import requests
 from cachetools import LRUCache
@@ -447,6 +447,14 @@ class FlexiProxyCustomHandler(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass  # logger.error("Async request failure")
+
+    async def async_logging_hook(
+        self, kwargs: dict, result: Any, call_type: str
+    ) -> Tuple[dict, Any]:
+        """For masking logged request/response. Return a modified version of the request/result."""
+        logger.warning("async_logging_hook=========================async_logging_hook")
+
+        return kwargs, result
 
     #### CALL HOOKS - proxy only ####
 
