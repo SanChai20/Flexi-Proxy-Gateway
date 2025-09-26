@@ -10,7 +10,7 @@ import time
 from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, Literal, Optional
 
 import requests
 from cachetools import LRUCache
@@ -77,9 +77,6 @@ class Config:
         os.getenv("HTTP_MAX_POOL_CONNECTIONS_COUNT", "10")
     )
     HTTP_RETRY_BACKOFF = float(os.getenv("HTTP_RETRY_BACKOFF", "0.5"))
-
-    # Key Cache
-    INVALID_KEY_THRESHOLD = int(os.getenv("INVALID_KEY_THRESHOLD", "3"))
 
 
 class TimestampedLRUCache(LRUCache[str, Any]):
