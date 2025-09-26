@@ -486,31 +486,17 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
 
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
-    _api_cache: "TimestampedLRUCache"
+    _adp_cache: "TimestampedLRUCache"
 
     def __init__(self):
         super().__init__(True)  # type: ignore
-        self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
+        self._adp_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
         TokenRotator.background_refresh(30)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
-
-    def _invalid_increment(self, fp_key_token: str):
-        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_key_token]
-        if api_cache_entry is not None:
-            api_cache_entry["error_counter"] += 1
-            self._api_cache[fp_key_token] = api_cache_entry
-        else:
-            self._api_cache[fp_key_token] = {"error_counter": 1}
-
-    def _invalid_reset(self, fp_key_token: str):
-        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_key_token]
-        if api_cache_entry is not None:
-            api_cache_entry["error_counter"] = 0
-            self._api_cache[fp_key_token] = api_cache_entry
 
     #### CALL HOOKS ####
 
@@ -546,31 +532,23 @@ class FlexiProxyCustomHandler(CustomLogger):
         ],
     ):
         fp_token = user_api_key_dict.token
-        fp_key = user_api_key_dict.api_key
-        if fp_token is None or fp_key is None:
+        if fp_token is None:
             logger.error("Api Key / Token not valid")
             return PreCallResponse.AUTHORIZATION
 
-        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_token]
-        if (
-            api_cache_entry is not None
-            and "error_counter" in api_cache_entry
-            and api_cache_entry["error_counter"] >= Config.INVALID_KEY_THRESHOLD
-        ):
-            return PreCallResponse.RATELIMIT
-
-        app_token: Optional[str] = TokenRotator.token()
-        if app_token is None:
-            logger.error("App token not valid")
-            return PreCallResponse.INTERNAL
-
-        if api_cache_entry is None:
+        adp_cache_entry: Optional[dict[str, Any]] = self._adp_cache[fp_token]
+        if adp_cache_entry is None:
+            fp_key = user_api_key_dict.api_key
+            app_token: Optional[str] = TokenRotator.token()
+            if app_token is None or fp_key is None:
+                logger.error("Invalid app token / key")
+                return PreCallResponse.INTERNAL
             try:
                 response: requests.Response = _http_client.post(
                     f"{Config.APP_BASE_URL}/api/adapters",
                     headers={
                         "authorization": f"Bearer {app_token}",
-                        "X-API-Key": client_api_key,
+                        "X-API-Key": fp_key,
                         "Content-Type": "application/json",
                     },
                     data={"public_key": KeyPairLoader.public_key()},
@@ -578,63 +556,26 @@ class FlexiProxyCustomHandler(CustomLogger):
                 response.raise_for_status()
             except requests.RequestException:
                 logger.error("Request failed")
-                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
 
             try:
                 response_data = response.json()
-            except ValueError:
-                logger.error("Failed to parse JSON response")
-                self._invalid_increment(client_api_key)
-                return PreCallResponse.INTERNAL
-
-            result: dict[str, str] = {}
-            try:
-                required_fields = ["uid", "url", "mid", "enc"]
-                if not all(field in response_data for field in required_fields):
-                    logger.error("Missing required fields in response")
-                    self._invalid_increment(client_api_key)
-                    return PreCallResponse.INTERNAL
-
-                # result["uid"] = response_data["uid"]
-                result["url"] = response_data["url"]
-                result["mid"] = response_data["mid"]
-
-                message_bytes = base64.b64decode(response_data["enc"])
-
-                try:
-                    message_decrypted: Optional[str] = KeyPairLoader.decrypt(
-                        message_bytes
-                    )
-                    if message_decrypted is None:
-                        logger.error("Decryption failed")
-                        self._invalid_increment(client_api_key)
-                        return PreCallResponse.INTERNAL
-                    result["key"] = message_decrypted
-                except ValueError:
-                    logger.error("Decryption failed")
-                    self._invalid_increment(client_api_key)
-                    return PreCallResponse.INTERNAL
-
-                self._api_cache[client_api_key] = cached_entry = result
+                data["api_base"] = response_data["url"]
+                data["model"] = response_data["mid"]
+                self._adp_cache[fp_token] = response_data
             except KeyError:
                 logger.error("Missing key in response data")
-                self._invalid_increment(client_api_key)
+                return PreCallResponse.INTERNAL
+            except ValueError:
+                logger.error("Failed to parse JSON response")
                 return PreCallResponse.INTERNAL
             except Exception:
                 logger.error("Error processing adapter response")
-                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
+        else:
+            data["api_base"] = adp_cache_entry["url"]
+            data["model"] = adp_cache_entry["mid"]
 
-        if api_cache_entry is None:
-            logger.error("Failed to retrieve user authorization information")
-            self._invalid_increment(client_api_key)
-            return PreCallResponse.INTERNAL
-
-        # Update data
-        data["api_base"] = cached_entry["url"]
-        data["model"] = cached_entry["mid"]
-        self._invalid_reset(client_api_key)
         ProxyRequestCounter.increment()
         return data
 
