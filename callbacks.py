@@ -481,8 +481,7 @@ class FlexiProxyCustomHandler(CustomLogger):
             logger.error("App token is invalid")
             return PreCallResponse.INTERNAL
 
-        cached_key = f"{client_api_key}:{app_token}"
-        cached_entry = self._api_cache[cached_key]
+        cached_entry = self._api_cache[client_api_key]
         if cached_entry is None:
             try:
                 response: requests.Response = self._http_client.post(
@@ -530,7 +529,7 @@ class FlexiProxyCustomHandler(CustomLogger):
                     logger.error("Decryption failed")
                     return PreCallResponse.INTERNAL
 
-                self._api_cache[cached_key] = cached_entry = result
+                self._api_cache[client_api_key] = cached_entry = result
             except KeyError:
                 logger.error("Missing key in response data")
                 return PreCallResponse.INTERNAL
