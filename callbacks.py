@@ -14,14 +14,13 @@ from typing import Any, Literal, Optional, Tuple
 
 import requests
 from cachetools import LRUCache
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.proxy_server import UserAPIKeyAuth
-from litellm.types.utils import LLMResponseTypes, ModelResponseStream
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -52,6 +51,7 @@ class PreCallResponse(Enum):
     COMPATIBILITY = "Compatibility Issue"
     AUTHORIZATION = "Authorization Issue"
     INTERNAL = "Internal Error"
+    RATELIMIT = "Rate Limits Reached"
 
 
 class Config:
@@ -64,7 +64,7 @@ class Config:
     PROXY_SERVER_ID = os.getenv("PROXY_SERVER_ID", None)
     PROXY_SERVER_ADVANCED = int(os.getenv("PROXY_SERVER_ADVANCED", "0"))
     PROXY_SERVER_KEYPAIR_PWD = os.getenv("PROXY_SERVER_KEYPAIR_PWD", None)
-
+    PROXY_SERVER_FERNET_KEY = os.getenv("PROXY_SERVER_FERNET_KEY", None)
     # LRU Cache
     LRU_MAX_CACHE_SIZE = int(os.getenv("LRU_MAX_CACHE_SIZE", "500"))
 
@@ -411,7 +411,34 @@ class KeyPairLoader:
         cls._public_key = None
 
 
+# str - bytes
+_key_cache: "TimestampedLRUCache" = TimestampedLRUCache(
+    maxsize=Config.LRU_MAX_CACHE_SIZE
+)
+_fernet_cipher: Optional[Fernet] = None
+
+
+def get_fernet_cipher() -> Fernet:
+    global _fernet_cipher
+    if _fernet_cipher is None:
+        if Config.PROXY_SERVER_FERNET_KEY is None:
+            raise Exception("Internal Error: Fernet key not configured")
+        _fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
+    return _fernet_cipher
+
+
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
+    global _key_cache
+    import hashlib
+
+    hashed_token = hashlib.sha256(api_key.encode()).hexdigest()
+    cache_entry: Optional[bytes] = _key_cache[hashed_token]
+    if cache_entry is not None:
+        return UserAPIKeyAuth(
+            api_key=get_fernet_cipher().decrypt(cache_entry).decode(),
+            user_role=LitellmUserRoles.CUSTOMER,
+        )
+
     app_token = TokenRotator.token()
     if app_token is None:
         raise Exception("Internal Error")
@@ -424,20 +451,46 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
             },
         )
         response.raise_for_status()
-        return UserAPIKeyAuth(api_key=api_key)
+        response = _http_client.post(
+            f"{Config.APP_BASE_URL}/api/auth/validate",
+            headers={
+                "authorization": f"Bearer {app_token}",
+                "X-API-Key": api_key,
+            },
+            data={"public_key": KeyPairLoader.public_key()},
+        )
+        response.raise_for_status()
     except requests.RequestException:
         raise Exception("Authentication validation failed")
+
+    try:
+        response_data = response.json()
+        message_bytes = base64.b64decode(response_data["enc"])
+        message_decrypted: Optional[str] = KeyPairLoader.decrypt(message_bytes)
+        if message_decrypted is None:
+            raise Exception("Decryption failed")
+
+        _key_cache[hashed_token] = get_fernet_cipher().encrypt(
+            message_decrypted.encode()
+        )
+        return UserAPIKeyAuth(
+            api_key=message_decrypted, user_role=LitellmUserRoles.CUSTOMER
+        )
+    except ValueError:
+        raise Exception("Decryption failed")
+    except KeyError:
+        raise Exception("Missing key in response data")
+    except Exception:
+        raise Exception
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
     _api_cache: "TimestampedLRUCache"
-    _invalid_key_cache: "TimestampedLRUCache"
 
     def __init__(self):
         super().__init__(True)  # type: ignore
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
-        self._invalid_key_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
         TokenRotator.background_refresh(30)
         if not KeyPairLoader.load():
@@ -445,17 +498,19 @@ class FlexiProxyCustomHandler(CustomLogger):
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
 
-    def _invalid_increment(self, client_api_key: str):
-        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
-        if invalid_cached_count is not None:
-            self._invalid_key_cache[client_api_key] = invalid_cached_count + 1
+    def _invalid_increment(self, fp_key_token: str):
+        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_key_token]
+        if api_cache_entry is not None:
+            api_cache_entry["error_counter"] += 1
+            self._api_cache[fp_key_token] = api_cache_entry
         else:
-            self._invalid_key_cache[client_api_key] = 1
+            self._api_cache[fp_key_token] = {"error_counter": 1}
 
-    def _invalid_reset(self, client_api_key: str):
-        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
-        if invalid_cached_count is not None:
-            self._invalid_key_cache[client_api_key] = 0
+    def _invalid_reset(self, fp_key_token: str):
+        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_key_token]
+        if api_cache_entry is not None:
+            api_cache_entry["error_counter"] = 0
+            self._api_cache[fp_key_token] = api_cache_entry
 
     #### CALL HOOKS ####
 
@@ -490,49 +545,26 @@ class FlexiProxyCustomHandler(CustomLogger):
             "mcp_call",
         ],
     ):
-        if "secret_fields" not in data:
-            logger.error('"secret_fields" field missing')
-            return PreCallResponse.COMPATIBILITY
-
-        if "raw_headers" not in data["secret_fields"]:
-            logger.error('"raw_headers" field missing')
-            return PreCallResponse.COMPATIBILITY
-
-        raw_headers: Optional[dict] = data["secret_fields"]["raw_headers"]
-        if raw_headers is None:
-            logger.error('"raw_headers" field is invalid')
-            return PreCallResponse.COMPATIBILITY
-
-        # Extract client API key
-        client_api_key = None
-        if "x-api-key" in raw_headers:
-            client_api_key = raw_headers["x-api-key"]
-        elif (
-            "authorization" in raw_headers
-            and isinstance(raw_headers["authorization"], str)
-            and str(raw_headers["authorization"]).startswith("Bearer ")
-        ):
-            client_api_key = raw_headers["authorization"][7:]
-
-        if client_api_key is None:
-            logger.error("Client API key not found in headers")
+        fp_token = user_api_key_dict.token
+        fp_key = user_api_key_dict.api_key
+        if fp_token is None or fp_key is None:
+            logger.error("Api Key / Token not valid")
             return PreCallResponse.AUTHORIZATION
 
-        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
+        api_cache_entry: Optional[dict[str, Any]] = self._api_cache[fp_token]
         if (
-            invalid_cached_count is not None
-            and invalid_cached_count >= Config.INVALID_KEY_THRESHOLD
+            api_cache_entry is not None
+            and "error_counter" in api_cache_entry
+            and api_cache_entry["error_counter"] >= Config.INVALID_KEY_THRESHOLD
         ):
-            return PreCallResponse.AUTHORIZATION
+            return PreCallResponse.RATELIMIT
 
         app_token: Optional[str] = TokenRotator.token()
         if app_token is None:
-            logger.error("App token is invalid")
-            self._invalid_increment(client_api_key)
+            logger.error("App token not valid")
             return PreCallResponse.INTERNAL
 
-        cached_entry = self._api_cache[client_api_key]
-        if cached_entry is None:
+        if api_cache_entry is None:
             try:
                 response: requests.Response = _http_client.post(
                     f"{Config.APP_BASE_URL}/api/adapters",
@@ -594,14 +626,13 @@ class FlexiProxyCustomHandler(CustomLogger):
                 self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
 
-        if cached_entry is None:
+        if api_cache_entry is None:
             logger.error("Failed to retrieve user authorization information")
             self._invalid_increment(client_api_key)
             return PreCallResponse.INTERNAL
 
         # Update data
         data["api_base"] = cached_entry["url"]
-        data["api_key"] = cached_entry["key"]
         data["model"] = cached_entry["mid"]
         self._invalid_reset(client_api_key)
         ProxyRequestCounter.increment()
