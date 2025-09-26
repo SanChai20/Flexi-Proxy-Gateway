@@ -77,8 +77,11 @@ class Config:
     )
     HTTP_RETRY_BACKOFF = float(os.getenv("HTTP_RETRY_BACKOFF", "0.5"))
 
+    # Key Cache
+    INVALID_KEY_THRESHOLD = int(os.getenv("INVALID_KEY_THRESHOLD", "3"))
 
-class TimestampedLRUCache(LRUCache[str, dict[str, str]]):
+
+class TimestampedLRUCache(LRUCache[str, Any]):
     _last_used: dict[str, float] = {}
 
     def __init__(self, maxsize, getsizeof=None):
@@ -405,11 +408,13 @@ class KeyPairLoader:
 class FlexiProxyCustomHandler(CustomLogger):
     _http_client: "HTTPClient"
     _api_cache: "TimestampedLRUCache"
+    _invalid_key_cache: "TimestampedLRUCache"
 
     def __init__(self):
         super().__init__(True)  # type: ignore
         self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
+        self._invalid_key_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
         TokenRotator.background_refresh(self._http_client, 30)
         if not KeyPairLoader.load():
@@ -417,17 +422,31 @@ class FlexiProxyCustomHandler(CustomLogger):
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
             )  # 加验证，抛错
 
+    def _invalid_increment(self, client_api_key: str):
+        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
+        if invalid_cached_count is not None:
+            self._invalid_key_cache[client_api_key] = invalid_cached_count + 1
+        else:
+            self._invalid_key_cache[client_api_key] = 1
+
+    def _invalid_reset(self, client_api_key: str):
+        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
+        if invalid_cached_count is not None:
+            self._invalid_key_cache[client_api_key] = 0
+
+    #### CALL HOOKS ####
+
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        logger.info("Request success")
+        pass  # logger.info("Request success")
 
     def log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        logger.error("Request failure")
+        pass  # logger.error("Request failure")
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        logger.info("Async request success")
+        pass  # logger.info("Async request success")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
-        logger.error("Async request failure")
+        pass  # logger.error("Async request failure")
 
     #### CALL HOOKS - proxy only ####
 
@@ -476,9 +495,17 @@ class FlexiProxyCustomHandler(CustomLogger):
             logger.error("Client API key not found in headers")
             return PreCallResponse.AUTHORIZATION
 
+        invalid_cached_count: Optional[int] = self._invalid_key_cache[client_api_key]
+        if (
+            invalid_cached_count is not None
+            and invalid_cached_count >= Config.INVALID_KEY_THRESHOLD
+        ):
+            return PreCallResponse.AUTHORIZATION
+
         app_token: Optional[str] = TokenRotator.token(self._http_client)
         if app_token is None:
             logger.error("App token is invalid")
+            self._invalid_increment(client_api_key)
             return PreCallResponse.INTERNAL
 
         cached_entry = self._api_cache[client_api_key]
@@ -496,12 +523,14 @@ class FlexiProxyCustomHandler(CustomLogger):
                 response.raise_for_status()
             except requests.RequestException:
                 logger.error("Request failed")
+                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
 
             try:
                 response_data = response.json()
             except ValueError:
                 logger.error("Failed to parse JSON response")
+                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
 
             result: dict[str, str] = {}
@@ -509,6 +538,7 @@ class FlexiProxyCustomHandler(CustomLogger):
                 required_fields = ["uid", "url", "mid", "enc"]
                 if not all(field in response_data for field in required_fields):
                     logger.error("Missing required fields in response")
+                    self._invalid_increment(client_api_key)
                     return PreCallResponse.INTERNAL
 
                 # result["uid"] = response_data["uid"]
@@ -523,29 +553,34 @@ class FlexiProxyCustomHandler(CustomLogger):
                     )
                     if message_decrypted is None:
                         logger.error("Decryption failed")
+                        self._invalid_increment(client_api_key)
                         return PreCallResponse.INTERNAL
                     result["key"] = message_decrypted
                 except ValueError:
                     logger.error("Decryption failed")
+                    self._invalid_increment(client_api_key)
                     return PreCallResponse.INTERNAL
 
                 self._api_cache[client_api_key] = cached_entry = result
             except KeyError:
                 logger.error("Missing key in response data")
+                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
             except Exception:
                 logger.error("Error processing adapter response")
+                self._invalid_increment(client_api_key)
                 return PreCallResponse.INTERNAL
 
         if cached_entry is None:
             logger.error("Failed to retrieve user authorization information")
+            self._invalid_increment(client_api_key)
             return PreCallResponse.INTERNAL
 
         # Update data
         data["api_base"] = cached_entry["url"]
         data["api_key"] = cached_entry["key"]
         data["model"] = cached_entry["mid"]
-
+        self._invalid_reset(client_api_key)
         ProxyRequestCounter.increment()
         return data
 
