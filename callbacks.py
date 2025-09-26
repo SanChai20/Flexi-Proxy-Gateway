@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.proxy_server import UserAPIKeyAuth
 from litellm.types.utils import LLMResponseTypes, ModelResponseStream
 from requests.adapters import HTTPAdapter
@@ -145,8 +146,14 @@ class HTTPClient:
     def post(self, url: str, headers: Any, data: Any) -> requests.Response:
         return self._request("POST", url, headers, data)
 
+    def get(self, url: str, headers: Any) -> requests.Response:
+        return self._request("GET", url, headers, None)
+
     def close(self):
         self.session.close()
+
+
+_http_client = HTTPClient()
 
 
 class ProxyRequestCounter:
@@ -189,7 +196,7 @@ class TokenRotator:
         raise TypeError(f"{cls.__name__} may not be instantiated")
 
     @classmethod
-    def background_refresh(cls, http_client: "HTTPClient", interval: int = 60):
+    def background_refresh(cls, interval: int = 60):
         def _refresher():
             while True:
                 time.sleep(interval)
@@ -205,7 +212,7 @@ class TokenRotator:
                         logger.debug(
                             "Background refresher: token nearing expiry, rotating..."
                         )
-                        cls.token(http_client)
+                        cls.token()
                     except Exception:
                         logger.error("Background token refresh failed")
 
@@ -213,7 +220,7 @@ class TokenRotator:
         t.start()
 
     @classmethod
-    def token(cls, http_client: "HTTPClient") -> Optional[str]:
+    def token(cls) -> Optional[str]:
         current_token: Optional[str] = None
         was_using_cache: bool = False
         is_initial: bool = False
@@ -259,7 +266,7 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
-                response: requests.Response = http_client.post(
+                response: requests.Response = _http_client.post(
                     url=f"{Config.APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
                     data={
@@ -404,19 +411,35 @@ class KeyPairLoader:
         cls._public_key = None
 
 
+async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
+    app_token = TokenRotator.token()
+    if app_token is None:
+        raise Exception("Internal Error")
+    try:
+        response = _http_client.get(
+            f"{Config.APP_BASE_URL}/api/auth/validate",
+            headers={
+                "authorization": f"Bearer {app_token}",
+                "X-API-Key": api_key,
+            },
+        )
+        response.raise_for_status()
+        return UserAPIKeyAuth(api_key=api_key)
+    except requests.RequestException:
+        raise Exception("Authentication validation failed")
+
+
 # This file includes the custom callbacks for LiteLLM Proxy
 class FlexiProxyCustomHandler(CustomLogger):
-    _http_client: "HTTPClient"
     _api_cache: "TimestampedLRUCache"
     _invalid_key_cache: "TimestampedLRUCache"
 
     def __init__(self):
         super().__init__(True)  # type: ignore
-        self._http_client = HTTPClient()
         self._api_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         self._invalid_key_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
         # Start background refresh
-        TokenRotator.background_refresh(self._http_client, 30)
+        TokenRotator.background_refresh(30)
         if not KeyPairLoader.load():
             raise RuntimeError(
                 "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
@@ -447,14 +470,6 @@ class FlexiProxyCustomHandler(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         pass  # logger.error("Async request failure")
-
-    async def async_logging_hook(
-        self, kwargs: dict, result: Any, call_type: str
-    ) -> Tuple[dict, Any]:
-        """For masking logged request/response. Return a modified version of the request/result."""
-        logger.warning("async_logging_hook=========================async_logging_hook")
-
-        return kwargs, result
 
     #### CALL HOOKS - proxy only ####
 
@@ -510,7 +525,7 @@ class FlexiProxyCustomHandler(CustomLogger):
         ):
             return PreCallResponse.AUTHORIZATION
 
-        app_token: Optional[str] = TokenRotator.token(self._http_client)
+        app_token: Optional[str] = TokenRotator.token()
         if app_token is None:
             logger.error("App token is invalid")
             self._invalid_increment(client_api_key)
@@ -519,7 +534,7 @@ class FlexiProxyCustomHandler(CustomLogger):
         cached_entry = self._api_cache[client_api_key]
         if cached_entry is None:
             try:
-                response: requests.Response = self._http_client.post(
+                response: requests.Response = _http_client.post(
                     f"{Config.APP_BASE_URL}/api/adapters",
                     headers={
                         "authorization": f"Bearer {app_token}",
@@ -599,6 +614,7 @@ proxy_handler_instance = FlexiProxyCustomHandler()
 def shutdown():
     KeyPairLoader.unload()
     TokenRotator.clear()
+    _http_client.close()
 
 
 atexit.register(shutdown)
