@@ -3,9 +3,6 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from dotenv import load_dotenv
-
-load_dotenv()
 
 FP_PROXY_SERVER_KEYPAIR_PWD = os.getenv("FP_PROXY_SERVER_KEYPAIR_PWD", None)
 FP_PROXY_SERVER_KEYPAIR_DIR = os.getenv("FP_PROXY_SERVER_KEYPAIR_DIR", None)

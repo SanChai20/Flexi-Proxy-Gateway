@@ -2,7 +2,6 @@
 import base64
 import logging
 import os
-import sys
 import threading
 import time
 from logging.handlers import TimedRotatingFileHandler
@@ -14,13 +13,9 @@ from cachetools import LRUCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
-from dotenv import load_dotenv
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
-
-# [TODO]
-load_dotenv()
 
 
 class Config:
@@ -81,11 +76,6 @@ class LoggerManager:
         )
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
-
-        # Dev [TODO...Remove]
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setFormatter(formatter)
-        root_logger.addHandler(console_handler)
 
         cls._logger = logging.getLogger(__name__)
 
