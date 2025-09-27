@@ -54,6 +54,10 @@
 
 #### **Linux 操作系统**
 
+chmod u+x launch.sh
+./launch.sh
+
+
 1. 环境准备
     ```cmd
     // 创建Python虚拟环境
