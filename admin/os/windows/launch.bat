@@ -19,6 +19,7 @@ echo Installing dependencies...
 pip install -r requirements-windows.txt
 
 echo Setting environment variables...
+set LITELLM_MODE=PRODUCTION
 set FP_APP_BASE_URL=https://www.flexiproxy.com
 set FP_PROXY_SERVER_URL=https://test.flexiproxy.com
 set FP_PROXY_SERVER_ADVANCED=0
