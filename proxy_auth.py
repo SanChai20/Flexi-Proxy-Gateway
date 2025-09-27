@@ -33,6 +33,7 @@ class Config:
     FP_PROXY_SERVER_ID = os.getenv("FP_PROXY_SERVER_ID", None)
     FP_PROXY_SERVER_ADVANCED = int(os.getenv("FP_PROXY_SERVER_ADVANCED", "0"))
     FP_PROXY_SERVER_KEYPAIR_PWD = os.getenv("FP_PROXY_SERVER_KEYPAIR_PWD", None)
+    FP_PROXY_SERVER_KEYPAIR_DIR = os.getenv("FP_PROXY_SERVER_KEYPAIR_DIR", "..")
     FP_PROXY_SERVER_FERNET_KEY = os.getenv("FP_PROXY_SERVER_FERNET_KEY", None)
 
     # LRU Cache
@@ -257,8 +258,9 @@ class HybridCrypto:
 
     @classmethod
     def load(cls) -> bool:
-        key_file_path = Path.cwd() / "key.pem"
-        public_file_path = Path.cwd() / "public.pem"
+        output_dir = Path(Config.FP_PROXY_SERVER_KEYPAIR_DIR).resolve()
+        key_file_path = output_dir / "key.pem"
+        public_file_path = output_dir / "public.pem"
 
         if not key_file_path.exists() or not public_file_path.exists():
             LoggerManager.error("Key files not found")
