@@ -26,6 +26,18 @@ if not exist .env (
     echo .env already exists, skipping copy.
 )
 
+echo Opening .env file for editing...
+start notepad .env
+
+:confirm_env
+set /p user_confirm=Have you finished editing the .env file? (y/n): 
+if /i "%user_confirm%"=="y" (
+    echo Proceeding with setup...
+) else (
+    echo Please finish editing the .env file.
+    goto confirm_env
+)
+
 echo Generating key pair...
 python admin\create_key_pair.py
 
