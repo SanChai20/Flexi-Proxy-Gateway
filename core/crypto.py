@@ -20,9 +20,9 @@ class HybridCrypto:
     @classmethod
     def symmetric_encrypt(cls, data: bytes | str) -> bytes:
         if cls._fernet_cipher is None:
-            if Config.PROXY_SERVER_FERNET_KEY is None:
+            if Config.FP_PROXY_SERVER_FERNET_KEY is None:
                 raise Exception("Internal Error")
-            cls._fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
+            cls._fernet_cipher = Fernet(Config.FP_PROXY_SERVER_FERNET_KEY)
         if isinstance(data, str):
             data = data.encode()
         return cls._fernet_cipher.encrypt(data)
@@ -30,9 +30,9 @@ class HybridCrypto:
     @classmethod
     def symmetric_decrypt(cls, token: bytes | str) -> bytes:
         if cls._fernet_cipher is None:
-            if Config.PROXY_SERVER_FERNET_KEY is None:
+            if Config.FP_PROXY_SERVER_FERNET_KEY is None:
                 raise Exception("Internal Error")
-            cls._fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
+            cls._fernet_cipher = Fernet(Config.FP_PROXY_SERVER_FERNET_KEY)
         return cls._fernet_cipher.decrypt(token)
 
     @classmethod
@@ -66,14 +66,14 @@ class HybridCrypto:
             LoggerManager.error("Key files not found")
             return False
 
-        if not Config.PROXY_SERVER_KEYPAIR_PWD:
+        if not Config.FP_PROXY_SERVER_KEYPAIR_PWD:
             LoggerManager.error("Keys password is invalid")
             return False
 
         try:
             private_pem_bytes = key_file_path.read_bytes()
             public_pem_bytes = public_file_path.read_bytes()
-            password = Config.PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
+            password = Config.FP_PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
 
             private_key = serialization.load_pem_private_key(
                 private_pem_bytes, password=password

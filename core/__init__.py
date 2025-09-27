@@ -4,7 +4,7 @@ from .crypto import HybridCrypto
 from .http import http_client
 from .logger import LoggerManager
 from .params import Config
-from .rotator import TokenRotator
+from .rotation import TokenRotator
 
 __all__ = [
     "TimestampedLRUCache",

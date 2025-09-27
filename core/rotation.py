@@ -5,6 +5,7 @@ from typing import Optional
 import requests
 
 from .counter import ProxyRequestCounter
+from .crypto import HybridCrypto
 from .http import http_client
 from .logger import LoggerManager
 from .params import Config
@@ -13,7 +14,7 @@ from .params import Config
 class TokenRotator:
     _lock = threading.RLock()
     _condition = threading.Condition(_lock)
-    _token_cache: Optional[str] = None
+    _token_cache: Optional[bytes] = None
     _expires_at: float = 0
     _initial_exchange_done: bool = False
     _initial_failed: bool = False
@@ -66,14 +67,14 @@ class TokenRotator:
 
                 # Check if we have a valid cached token
                 if cls._token_cache is not None and now < cls._expires_at:
-                    return cls._token_cache
+                    return HybridCrypto.symmetric_decrypt(cls._token_cache).decode()
 
                 # Early fallback for initial failure
                 if not cls._initial_exchange_done and cls._initial_failed:
                     LoggerManager.warn(
                         "Initial token exchange failed previously; falling back to env token"
                     )
-                    return Config.APP_TOKEN_PASS
+                    return Config.FP_APP_TOKEN_PASS
 
                 # If another thread is rotating, wait for it to complete
                 if cls._rotating:
@@ -83,9 +84,9 @@ class TokenRotator:
 
                 # No valid token; start rotation
                 current_token = (
-                    cls._token_cache
+                    HybridCrypto.symmetric_decrypt(cls._token_cache).decode()
                     if cls._token_cache is not None
-                    else Config.APP_TOKEN_PASS
+                    else Config.FP_APP_TOKEN_PASS
                 )
                 if current_token is None:
                     LoggerManager.error("No current token available for exchange")
@@ -102,13 +103,13 @@ class TokenRotator:
             new_expires_at: float = 0
             try:
                 response: requests.Response = http_client.post(
-                    url=f"{Config.APP_BASE_URL}/api/auth/exchange",
+                    url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
                     data={
-                        "url": Config.PROXY_SERVER_URL,
+                        "url": Config.FP_PROXY_SERVER_URL,
                         "status": ProxyRequestCounter.status(),
-                        "adv": Config.PROXY_SERVER_ADVANCED == 1,
-                        "id": Config.PROXY_SERVER_ID,
+                        "adv": Config.FP_PROXY_SERVER_ADVANCED == 1,
+                        "id": Config.FP_PROXY_SERVER_ID,
                     },
                 )
 
@@ -144,7 +145,7 @@ class TokenRotator:
             with cls._lock:
                 cls._rotating = False
                 if success_token:
-                    cls._token_cache = success_token
+                    cls._token_cache = HybridCrypto.symmetric_encrypt(success_token)
                     cls._expires_at = new_expires_at
                     if is_initial:
                         cls._initial_exchange_done = True

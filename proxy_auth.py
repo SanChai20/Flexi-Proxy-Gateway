@@ -9,17 +9,17 @@ from core import Config, HybridCrypto, TimestampedLRUCache, TokenRotator, http_c
 
 # str - dict
 _key_cache: "TimestampedLRUCache" = TimestampedLRUCache(
-    maxsize=Config.LRU_MAX_CACHE_SIZE
+    maxsize=Config.FP_LRU_MAX_CACHE_SIZE
 )
 
 HybridCrypto.unload()
 if not HybridCrypto.load():
     raise RuntimeError(
-        "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
+        "Failed to load keys. Check *key.pem, *public.pem and PROXY_SERVER_KEYPAIR_PWD."
     )
 
 TokenRotator.clear()
-TokenRotator.background_refresh(10)
+TokenRotator.background_refresh(60)
 
 
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
@@ -44,7 +44,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         raise Exception("Internal Error")
     try:
         response = http_client.get(
-            f"{Config.APP_BASE_URL}/api/auth/validate",
+            f"{Config.FP_APP_BASE_URL}/api/auth/validate",
             headers={
                 "authorization": f"Bearer {app_token}",
                 "X-API-Key": api_key,
@@ -52,7 +52,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         )
         response.raise_for_status()
         response = http_client.post(
-            f"{Config.APP_BASE_URL}/api/auth/validate",
+            f"{Config.FP_APP_BASE_URL}/api/auth/validate",
             headers={
                 "authorization": f"Bearer {app_token}",
                 "X-API-Key": api_key,

@@ -15,7 +15,10 @@ echo "Installing dependencies..."
 pip3 install -r requirements-linux.txt || { echo "Failed to install dependencies"; exit 1; }
 
 echo "Configuring environment file..."
-cp .env.example .env || { echo "Failed to copy environment file"; exit 1; }
+
+
+
+
 
 echo "Setting environment variable..."
 export LITELLM_MODE=PRODUCTION

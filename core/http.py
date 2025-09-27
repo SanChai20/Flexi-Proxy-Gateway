@@ -14,22 +14,22 @@ class HTTPClient:
         self,
     ):
         self.timeout = (
-            Config.HTTP_CONNECT_TIMEOUT_LIMIT,
-            Config.HTTP_READ_TIMEOUT_LIMIT,
+            Config.FP_HTTP_CONNECT_TIMEOUT_LIMIT,
+            Config.FP_HTTP_READ_TIMEOUT_LIMIT,
         )
         self.session = requests.Session()
 
         retry_strategy = Retry(
-            total=Config.HTTP_MAX_RETRY_COUNT,
-            backoff_factor=Config.HTTP_RETRY_BACKOFF,
+            total=Config.FP_HTTP_MAX_RETRY_COUNT,
+            backoff_factor=Config.FP_HTTP_RETRY_BACKOFF,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
             raise_on_status=False,
         )
         adapter = HTTPAdapter(
             max_retries=retry_strategy,
-            pool_connections=Config.HTTP_MAX_POOL_CONNECTIONS_COUNT,
-            pool_maxsize=Config.HTTP_POOL_MAX_SIZE,
+            pool_connections=Config.FP_HTTP_MAX_POOL_CONNECTIONS_COUNT,
+            pool_maxsize=Config.FP_HTTP_POOL_MAX_SIZE,
         )
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
@@ -51,5 +51,4 @@ class HTTPClient:
         self.session.close()
 
 
-print("AAAAAAAAAAA - http_client")
 http_client = HTTPClient()
