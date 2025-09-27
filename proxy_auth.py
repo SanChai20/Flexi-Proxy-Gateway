@@ -3,24 +3,23 @@ import base64
 from typing import Optional
 
 import requests
-from cryptography.fernet import Fernet
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
-from core import Config, KeyPairLoader, TimestampedLRUCache, TokenRotator, http_client
+from core import Config, HybridCrypto, TimestampedLRUCache, TokenRotator, http_client
 
+# str - dict
 _key_cache: "TimestampedLRUCache" = TimestampedLRUCache(
     maxsize=Config.LRU_MAX_CACHE_SIZE
 )
-_fernet_cipher: Optional[Fernet] = None
 
+HybridCrypto.unload()
+if not HybridCrypto.load():
+    raise RuntimeError(
+        "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
+    )
 
-def get_fernet_cipher() -> Fernet:
-    global _fernet_cipher
-    if _fernet_cipher is None:
-        if Config.PROXY_SERVER_FERNET_KEY is None:
-            raise Exception("Internal Error: Fernet key not configured")
-        _fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
-    return _fernet_cipher
+TokenRotator.clear()
+TokenRotator.background_refresh(10)
 
 
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
@@ -28,10 +27,15 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     import hashlib
 
     hashed_token = hashlib.sha256(api_key.encode()).hexdigest()
-    cache_entry: Optional[bytes] = _key_cache[hashed_token]
+    cache_entry: Optional[dict[str, str]] = _key_cache[hashed_token]
     if cache_entry is not None:
+        raw_key: str = HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode()
         return UserAPIKeyAuth(
-            api_key=get_fernet_cipher().decrypt(cache_entry).decode(),
+            metadata={
+                "fp_url": cache_entry["url"],
+                "fp_mid": cache_entry["mid"],
+            },
+            api_key=raw_key,
             user_role=LitellmUserRoles.CUSTOMER,
         )
 
@@ -53,7 +57,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
                 "authorization": f"Bearer {app_token}",
                 "X-API-Key": api_key,
             },
-            data={"public_key": KeyPairLoader.public_key()},
+            data={"public_key": HybridCrypto.asymmetric_public_key()},
         )
         response.raise_for_status()
     except requests.RequestException:
@@ -62,15 +66,24 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     try:
         response_data = response.json()
         message_bytes = base64.b64decode(response_data["enc"])
-        message_decrypted: Optional[str] = KeyPairLoader.decrypt(message_bytes)
+        message_decrypted: Optional[str] = HybridCrypto.asymmetric_decrypt(
+            message_bytes
+        )
         if message_decrypted is None:
             raise Exception("Decryption failed")
-
-        _key_cache[hashed_token] = get_fernet_cipher().encrypt(
-            message_decrypted.encode()
-        )
+        entry = {
+            "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(),
+            "url": response_data["url"],
+            "mid": response_data["mid"],
+        }
+        _key_cache[hashed_token] = entry
         return UserAPIKeyAuth(
-            api_key=message_decrypted, user_role=LitellmUserRoles.CUSTOMER
+            metadata={
+                "fp_url": response_data["url"],
+                "fp_mid": response_data["mid"],
+            },
+            api_key=message_decrypted,
+            user_role=LitellmUserRoles.CUSTOMER,
         )
     except ValueError:
         raise Exception("Decryption failed")

@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
+from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
@@ -8,19 +9,38 @@ from .logger import LoggerManager
 from .params import Config
 
 
-class KeyPairLoader:
+class HybridCrypto:
     _private_key: Optional[rsa.RSAPrivateKey] = None
     _public_key: Optional[str] = None
+    _fernet_cipher: Optional[Fernet] = None
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
 
     @classmethod
-    def public_key(cls) -> Optional[str]:
+    def symmetric_encrypt(cls, data: bytes | str) -> bytes:
+        if cls._fernet_cipher is None:
+            if Config.PROXY_SERVER_FERNET_KEY is None:
+                raise Exception("Internal Error")
+            cls._fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
+        if isinstance(data, str):
+            data = data.encode()
+        return cls._fernet_cipher.encrypt(data)
+
+    @classmethod
+    def symmetric_decrypt(cls, token: bytes | str) -> bytes:
+        if cls._fernet_cipher is None:
+            if Config.PROXY_SERVER_FERNET_KEY is None:
+                raise Exception("Internal Error")
+            cls._fernet_cipher = Fernet(Config.PROXY_SERVER_FERNET_KEY)
+        return cls._fernet_cipher.decrypt(token)
+
+    @classmethod
+    def asymmetric_public_key(cls) -> Optional[str]:
         return cls._public_key
 
     @classmethod
-    def decrypt(cls, msg_bytes: bytes) -> Optional[str]:
+    def asymmetric_decrypt(cls, msg_bytes: bytes) -> Optional[str]:
         if cls._private_key is None:
             return None
         try:
