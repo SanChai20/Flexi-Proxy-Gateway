@@ -4,8 +4,27 @@ setlocal
 echo Changing to the target directory...
 cd ../../../
 
+echo Checking if virtual environment already exists...
+if exist .venv (
+    echo .venv already exists, skipping creation.
+) else (
+    echo Creating Python virtual environment...
+    py -m venv .venv
+)
+
 echo Activating virtual environment...
 call .\.venv\Scripts\activate.bat
+
+echo Installing dependencies...
+pip install -r requirements-windows.txt
+
+echo Configuring environment file...
+if not exist .env (
+    echo Copying .env.example to .env...
+    copy .env.example .env
+) else (
+    echo .env already exists, skipping copy.
+)
 
 echo Generating key pair...
 python admin\create_key_pair.py
