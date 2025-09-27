@@ -18,6 +18,8 @@ class TokenRotator:
     _initial_exchange_done: bool = False
     _initial_failed: bool = False
     _rotating: bool = False
+    _stop_thread: bool = False
+    _background_thread: Optional[threading.Thread] = None
 
     def __new__(cls, *args, **kwargs):
         raise TypeError(f"{cls.__name__} may not be instantiated")
@@ -26,14 +28,17 @@ class TokenRotator:
     def background_refresh(cls, interval: int = 60):
         def _refresher():
             while True:
+                with cls._lock:
+                    if cls._stop_thread:
+                        LoggerManager.debug("Background refresher stopping...")
+                        break
                 time.sleep(interval)
-                should_refresh = False
                 with cls._lock:
                     now = time.time()
-                    if (
+                    should_refresh = (
                         cls._token_cache is None or now > cls._expires_at - 600
-                    ):  # 10分钟窗口
-                        should_refresh = True
+                    )
+
                 if should_refresh:
                     try:
                         LoggerManager.debug(
@@ -43,8 +48,11 @@ class TokenRotator:
                     except Exception:
                         LoggerManager.error("Background token refresh failed")
 
-        t = threading.Thread(target=_refresher, daemon=True)
-        t.start()
+        if cls._background_thread is None or not cls._background_thread.is_alive():
+            cls._stop_thread = False
+            t = threading.Thread(target=_refresher, daemon=True)
+            cls._background_thread = t
+            t.start()
 
     @classmethod
     def token(cls) -> Optional[str]:
@@ -163,7 +171,13 @@ class TokenRotator:
 
     @classmethod
     def clear(cls) -> None:
-        """Clear the cached token, forcing a rotation on next token() call."""
+        """Clear the cached token and stop the background refresher."""
         with cls._lock:
             cls._token_cache = None
             cls._expires_at = 0
+            cls._stop_thread = True
+            cls._condition.notify_all()
+        if cls._background_thread:
+            cls._background_thread.join(timeout=1)
+            cls._background_thread = None
+        LoggerManager.info("Token cache cleared and background refresher stopped")

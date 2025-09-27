@@ -27,23 +27,14 @@ class PreCallResponse(Enum):
     RATELIMIT = "Rate Limits Reached"
 
 
-_init_lock = threading.Lock()
-_initialized = False
+KeyPairLoader.unload()
+if not KeyPairLoader.load():
+    raise RuntimeError(
+        "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
+    )
 
-
-def initialize_once():
-    global _initialized
-    with _init_lock:
-        if not _initialized:
-            if not KeyPairLoader.load():
-                raise RuntimeError(
-                    "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
-                )
-            TokenRotator.background_refresh(10)
-            _initialized = True
-
-
-initialize_once()
+TokenRotator.clear()
+TokenRotator.background_refresh(10)
 
 
 # This file includes the custom callbacks for LiteLLM Proxy
@@ -53,12 +44,6 @@ class FlexiProxyCustomHandler(CustomLogger):
     def __init__(self):
         super().__init__(True)  # type: ignore
         self._adp_cache = TimestampedLRUCache(maxsize=Config.LRU_MAX_CACHE_SIZE)
-        # Start background refresh
-        TokenRotator.background_refresh(30)
-        if not KeyPairLoader.load():
-            raise RuntimeError(
-                "Failed to load keys. Check key.pem, public.pem and PROXY_SERVER_KEYPAIR_PWD."
-            )  # 加验证，抛错
 
     #### CALL HOOKS ####
 
