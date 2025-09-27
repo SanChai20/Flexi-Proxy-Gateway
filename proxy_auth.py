@@ -44,8 +44,8 @@ class Config:
         os.getenv("FP_HTTP_MAX_POOL_CONNECTIONS_COUNT", "10")
     )
     FP_HTTP_CONNECT_TIMEOUT_LIMIT = int(os.getenv("FP_HTTP_CONNECT_TIMEOUT_LIMIT", "8"))
-    FP_HTTP_READ_TIMEOUT_LIMIT = int(os.getenv("FP_HTTP_READ_TIMEOUT_LIMIT", "120"))
-    FP_HTTP_MAX_RETRY_COUNT = int(os.getenv("FP_HTTP_MAX_RETRY_COUNT", "3"))
+    FP_HTTP_READ_TIMEOUT_LIMIT = int(os.getenv("FP_HTTP_READ_TIMEOUT_LIMIT", "240"))
+    FP_HTTP_MAX_RETRY_COUNT = int(os.getenv("FP_HTTP_MAX_RETRY_COUNT", "5"))
     FP_HTTP_RETRY_BACKOFF = float(os.getenv("FP_HTTP_RETRY_BACKOFF", "0.5"))
     FP_HTTP_POOL_MAX_SIZE = int(os.getenv("FP_HTTP_POOL_MAX_SIZE", "30"))
 
