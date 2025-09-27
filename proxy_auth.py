@@ -29,13 +29,13 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     hashed_token = hashlib.sha256(api_key.encode()).hexdigest()
     cache_entry: Optional[dict[str, str]] = _key_cache[hashed_token]
     if cache_entry is not None:
-        raw_key: str = HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode()
         return UserAPIKeyAuth(
             metadata={
+                "fp_enc": cache_entry["enc"],
                 "fp_url": cache_entry["url"],
                 "fp_mid": cache_entry["mid"],
             },
-            api_key=raw_key,
+            api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
         )
 
@@ -79,10 +79,11 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         _key_cache[hashed_token] = entry
         return UserAPIKeyAuth(
             metadata={
-                "fp_url": response_data["url"],
-                "fp_mid": response_data["mid"],
+                "fp_enc": entry["enc"],
+                "fp_url": entry["url"],
+                "fp_mid": entry["mid"],
             },
-            api_key=message_decrypted,
+            api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
         )
     except ValueError:

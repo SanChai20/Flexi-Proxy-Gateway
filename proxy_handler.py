@@ -7,6 +7,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
 from core import (
+    HybridCrypto,
     LoggerManager,
     ProxyRequestCounter,
 )
@@ -51,9 +52,11 @@ class FlexiProxyCustomHandler(CustomLogger):
             "mcp_call",
         ],
     ):
-        if "fp_url" not in user_api_key_dict.metadata or "fp_mid" not in user_api_key_dict.metadata:  # type: ignore
+        if "fp_url" not in user_api_key_dict.metadata or "fp_mid" not in user_api_key_dict.metadata or "fp_enc" not in user_api_key_dict.metadata:  # type: ignore
             LoggerManager.error("Invalid metadata")
             return "Internal Error"
+
+        data["api_key"] = HybridCrypto.symmetric_decrypt(user_api_key_dict.metadata["fp_enc"]).decode()  # type: ignore
         data["api_base"] = user_api_key_dict.metadata["fp_url"]  # type: ignore
         data["model"] = user_api_key_dict.metadata["fp_mid"]  # type: ignore
         ProxyRequestCounter.increment()
