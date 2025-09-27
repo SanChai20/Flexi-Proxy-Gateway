@@ -13,11 +13,11 @@ litellm_settings:
   set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
   json_logs: true         # Get debug logs in json format
   drop_params: True
-  callbacks: callbacks.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
+  callbacks: proxy_handler.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
   cache: True
   cache_params:
     type: disk
     disk_cache_dir: ./litellm-cache
 
 general_settings:
-  custom_auth: callbacks.user_api_key_auth
+  custom_auth: proxy_auth.user_api_key_auth
