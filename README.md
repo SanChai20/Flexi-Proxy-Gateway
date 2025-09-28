@@ -32,6 +32,8 @@
 
 跳转至`admin/os/linux`目录下，执行`chmod u+x launch.sh`添加权限，然后执行`./launch.sh`并按照指示配置环境变量即可
 
+> 通过Windows上的VS Code部署至服务器时，如果手动拷贝，可能会遇到`launch.sh`无法执行的问题，这是因为Windows风格换行符的问题，需要先执行`dos2unix launch.sh`转成Unix格式
+
 ## English
 
 ### Local Deployment
@@ -43,3 +45,5 @@ Run the `admin/os/windows/launch.bat` file and follow the prompts to configure t
 #### **Linux OS**
 
 Navigate to the `admin/os/linux` directory, run `chmod u+x launch.sh` to add execute permission, then run `./launch.sh` and follow the prompts to configure the environment variables.
+
+> When deploying to the server from VS Code on Windows, if you copy the file manually, you may encounter an issue where `launch.sh` cannot be executed. This happens because of Windows-style line endings. You need to run `dos2unix launch.sh` first to convert it to Unix format.
