@@ -79,6 +79,8 @@ export FP_HTTP_MAX_RETRY_COUNT=5
 export FP_HTTP_MAX_POOL_CONNECTIONS_COUNT=10
 export FP_HTTP_POOL_MAX_SIZE=30
 export FP_HTTP_RETRY_BACKOFF=0.5
+export NO_DOCS=True
+export NO_REDOC=True
 
 echo "Generating key pair..."
 python3 admin/create_key_pair.py
