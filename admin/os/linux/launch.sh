@@ -41,4 +41,4 @@ echo "Generating key pair..."
 python3 admin/create_key_pair.py
 
 echo "Starting LiteLLM Proxy Server..."
-litellm --config config.yaml --port 4000
+nohup litellm --config config.yaml --port 80 &
