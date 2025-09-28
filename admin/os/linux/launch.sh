@@ -21,12 +21,14 @@ pip install -r requirements-linux.txt
 echo "Setting environment variables..."
 export LITELLM_MODE=PRODUCTION
 export FP_APP_BASE_URL=https://www.flexiproxy.com
-export FP_PROXY_SERVER_URL=https://test.flexiproxy.com
 export FP_PROXY_SERVER_ADVANCED=0
 export FP_PROXY_SERVER_KEYPAIR_DIR=../key
 
 read -p "[FP_APP_TOKEN_PASS] Issued by flexi-proxy admin/token-issuance.ts: " FP_APP_TOKEN_PASS
 export FP_APP_TOKEN_PASS
+
+read -p "[FP_PROXY_SERVER_URL] Proxy server https url (subdomain): " FP_PROXY_SERVER_URL
+export FP_PROXY_SERVER_URL
 
 read -p "[FP_PROXY_SERVER_ID] Customized proxy server id: " FP_PROXY_SERVER_ID
 export FP_PROXY_SERVER_ID
