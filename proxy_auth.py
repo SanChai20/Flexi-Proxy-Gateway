@@ -482,6 +482,8 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     global _key_cache
     import hashlib
 
+    if api_key is None:
+        raise Exception("API Key missing in request")
     hashed_token = hashlib.sha256(api_key.encode()).hexdigest()
     cache_entry: Optional[dict[str, str]] = _key_cache[hashed_token]
     if cache_entry is not None:
