@@ -50,3 +50,8 @@ echo "=============Auto renew BEGIN============="
 grep -q '/opt/certbot/bin/python -c .*certbot renew -q' /etc/crontab || \
 echo "0 0,12 * * * root /opt/certbot/bin/python -c 'import random; import time; time.sleep(random.random() * 3600)' && sudo certbot renew -q" | sudo tee -a /etc/crontab
 echo "=============Auto renew END============="
+
+echo "=============Reload Nginx BEGIN============="
+sudo nginx -t
+sudo systemctl reload nginx
+echo "=============Reload Nginx END============="
