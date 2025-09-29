@@ -25,7 +25,10 @@ sudo /opt/certbot/bin/pip install certbot certbot-nginx
 echo "=============Install Certbot END============="
 
 echo "=============Prepare the Certbot command BEGIN============="
-sudo rm /usr/bin/certbot
+if [ -f /usr/bin/certbot ]; then
+    echo "Removing existing /usr/bin/certbot..."
+    sudo rm /usr/bin/certbot
+fi
 sudo ln -s /opt/certbot/bin/certbot /usr/bin/certbot
 echo "=============Prepare the Certbot command END============="
 
