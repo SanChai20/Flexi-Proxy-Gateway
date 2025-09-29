@@ -14,7 +14,7 @@ read -p "Do you want to deploy Certbot SSL? (y/n): " DEPLOY_CERTBOT
 if [[ "$DEPLOY_CERTBOT" == "y" || "$DEPLOY_CERTBOT" == "Y" ]]; then
 echo "=============Install system dependencies BEGIN============="
 sudo apt update
-sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc nginx
+sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc nginx build-essential
 echo "=============Install system dependencies END============="
 
 echo "=============Remove certbot-auto and any Certbot OS packages BEGIN============="
