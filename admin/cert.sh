@@ -35,10 +35,10 @@ chmod u+x ./_cleanup.sh
 echo "=============Give *.sh files permissions END============="
 
 echo "=============Configure BEGIN============="
-read -p "[DOMAIN_NAME] Please enter your domain's url: " DOMAIN_NAME
-read -p "[VERCEL_ACCESS_TOKEN] Please enter your domain's url: " VERCEL_ACCESS_TOKEN
+read -p "[DOMAIN_NAME] Subdomain's url (e.g. example.flexiproxy.com): " DOMAIN_NAME
+read -p "[VERCEL_ACCESS_TOKEN] Vercel's access token (https://vercel.com/account/settings/tokens): " VERCEL_ACCESS_TOKEN
 export VERCEL_ACCESS_TOKEN
-read -p "[VERCEL_TEAM_ID] Please enter your domain's url: " VERCEL_TEAM_ID
+read -p "[VERCEL_TEAM_ID] Vercel team's id (https://vercel.com/account): " VERCEL_TEAM_ID
 export VERCEL_TEAM_ID
 echo "=============Configure END============="
 
