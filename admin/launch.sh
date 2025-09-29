@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+echo "Changing to the target directory..."
+cd ../
+
 echo "Checking if virtual environment already exists..."
 if [ -d ".venv" ]; then
     echo ".venv already exists, skipping creation."
@@ -13,7 +16,7 @@ echo "Activating virtual environment..."
 source .venv/bin/activate
 
 echo "Installing dependencies..."
-pip install -r requirements.txt
+pip install -r requirements-linux.txt
 
 echo "Setting environment variables..."
 
