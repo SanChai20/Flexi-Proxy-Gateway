@@ -8,7 +8,7 @@ echo "Change to sh dir"
 
 echo "=============Install system dependencies BEGIN============="
 sudo apt update
-sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc
+sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc nginx
 echo "=============Install system dependencies END============="
 
 echo "=============Remove certbot-auto and any Certbot OS packages BEGIN============="
