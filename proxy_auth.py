@@ -493,7 +493,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     import hashlib
 
     if api_key is None:
-        raise Exception("API Key missing in request")
+        raise Exception("Internal Error")
     hashed_token = hashlib.sha256(api_key.encode()).hexdigest()
     cache_entry: Optional[dict[str, str]] = _key_cache[hashed_token]
     if cache_entry is not None:
@@ -530,7 +530,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         )
         response.raise_for_status()
     except requests.RequestException:
-        raise Exception("Authentication validation failed")
+        raise Exception("Internal Error")
 
     try:
         response_data = response.json()
@@ -539,7 +539,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
             message_bytes
         )
         if message_decrypted is None:
-            raise Exception("Decryption failed")
+            raise Exception("Internal Error")
         entry = {
             "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(),
             "url": response_data["url"],
@@ -557,8 +557,8 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
             user_role=LitellmUserRoles.CUSTOMER,
         )
     except ValueError:
-        raise Exception("Decryption failed")
+        raise Exception("Internal Error")
     except KeyError:
-        raise Exception("Missing key in response data")
+        raise Exception("Internal Error")
     except Exception:
         raise Exception
