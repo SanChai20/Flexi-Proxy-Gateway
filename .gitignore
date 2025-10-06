@@ -213,3 +213,4 @@ litellm-cache
 app.log
 app.log.*
 logs
+nohup.out
