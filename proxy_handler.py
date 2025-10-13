@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from litellm.caching.dual_cache import DualCache
@@ -46,11 +47,30 @@ class FlexiProxyCustomHandler(CustomLogger):
             "mcp_call",
         ],
     ):
-        if "fp_url" not in user_api_key_dict.metadata or "fp_mid" not in user_api_key_dict.metadata or "fp_key" not in user_api_key_dict.metadata:  # type: ignore
+        if "fp_pro" not in user_api_key_dict.metadata or "fp_mid" not in user_api_key_dict.metadata or "fp_key" not in user_api_key_dict.metadata:  # type: ignore
             return "Internal Error"
-        data["api_key"] = user_api_key_dict.metadata.pop("fp_key")  # type: ignore
-        data["api_base"] = user_api_key_dict.metadata.pop("fp_url")  # type: ignore
-        data["model"] = user_api_key_dict.metadata.pop("fp_mid")  # type: ignore
+
+        pro = user_api_key_dict.metadata.pop("fp_pro", None)  # type: ignore
+        mid = user_api_key_dict.metadata.pop("fp_mid", None)  # type: ignore
+        key = user_api_key_dict.metadata.pop("fp_key", None)  # type: ignore
+        if not all([pro, mid, key]):
+            return "Internal Error"
+
+        data["api_key"] = key
+        data["model"] = f"{pro}/{mid}"
+
+        llm = user_api_key_dict.metadata.pop("fp_llm", None)  # type: ignore
+        if llm is not None and llm.strip():  # type: ignore
+            try:
+                llm_params = json.loads(llm)  # type: ignore
+            except json.JSONDecodeError:
+                return "Invalid LLM Params Format"
+
+            if "litellm_params" not in data:
+                data["litellm_params"] = llm_params
+            else:
+                data["litellm_params"] = {**data["litellm_params"], **llm_params}
+
         return data
 
 

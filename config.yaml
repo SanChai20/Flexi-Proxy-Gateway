@@ -1,17 +1,101 @@
 model_list:
-  - model_name: "*" 
+  - model_name: openai/*
     litellm_params:
-      model: "*"
-      custom_llm_provider: openai
+      model: openai/*
+      max_retries: 5
+  - model_name: aiml/*
+    litellm_params:
+      model: aiml/*
+      max_retries: 5
+  - model_name: anthropic/*
+    litellm_params:
+      model: anthropic/*
+      max_retries: 5
+  - model_name: cerebras/*
+    litellm_params:
+      model: cerebras/*
+      max_retries: 5
+  - model_name: cohere/*
+    litellm_params:
+      model: cohere/*
+      max_retries: 5
+  - model_name: databricks/*
+    litellm_params:
+      model: databricks/*
+      max_retries: 5
+  - model_name: deepinfra/*
+    litellm_params:
+      model: deepinfra/*
+      max_retries: 5
+  - model_name: deepgram/*
+    litellm_params:
+      model: deepgram/*
+      max_retries: 5
+  - model_name: deepseek/*
+    litellm_params:
+      model: deepseek/*
+      max_retries: 5
+  - model_name: fireworks_ai/*
+    litellm_params:
+      model: fireworks_ai/*
+      max_retries: 5
+  - model_name: gemini/*
+    litellm_params:
+      model: gemini/*
+      max_retries: 5
+  - model_name: groq/*
+    litellm_params:
+      model: groq/*
+      max_retries: 5
+  - model_name: jina_ai/*
+    litellm_params:
+      model: jina_ai/*
+      max_retries: 5
+  - model_name: mistral/*
+    litellm_params:
+      model: mistral/*
+      max_retries: 5
+  - model_name: openrouter/*
+    litellm_params:
+      model: openrouter/*
+      max_retries: 5
+  - model_name: oci/*
+    litellm_params:
+      model: oci/*
+      max_retries: 5
+  - model_name: perplexity/*
+    litellm_params:
+      model: perplexity/*
+      max_retries: 5
+  - model_name: sambanova/*
+    litellm_params:
+      model: sambanova/*
+      max_retries: 5
+  - model_name: together_ai/*
+    litellm_params:
+      model: together_ai/*
+      max_retries: 5
+  - model_name: volcengine/*
+    litellm_params:
+      model: volcengine/*
+      max_retries: 5
+  - model_name: voyage/*
+    litellm_params:
+      model: voyage/*
+      max_retries: 5
+  - model_name: xai/*
+    litellm_params:
+      model: xai/*
       max_retries: 5
 
 router_settings:
   routing_strategy: simple-shuffle
+  cooldown_time: 1
 
 litellm_settings:
-  request_timeout: 600    # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
-  set_verbose: False      # Switch off Debug Logging, ensure your logs do not have any debugging on
-  json_logs: true         # Get debug logs in json format
+  request_timeout: 600 # raise Timeout error if call takes longer than 600 seconds. Default value is 6000seconds if not set
+  set_verbose: False # Switch off Debug Logging, ensure your logs do not have any debugging on
+  json_logs: true # Get debug logs in json format
   drop_params: True
   callbacks: proxy_handler.proxy_handler_instance # sets litellm.callbacks = [proxy_handler_instance]
   cache: True
