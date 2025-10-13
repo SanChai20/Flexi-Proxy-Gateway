@@ -14,6 +14,7 @@ from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.utils import get_valid_models
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -379,6 +380,8 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
+                # valid_models = get_valid_models()
+                # print(valid_models)
                 response: requests.Response = http_client.post(
                     url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
