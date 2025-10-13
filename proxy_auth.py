@@ -501,8 +501,9 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode(),
-                "fp_url": cache_entry["url"],
+                "fp_pro": cache_entry["pro"],
                 "fp_mid": cache_entry["mid"],
+                "fp_llm": cache_entry["llm"],
             },
             api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
@@ -540,18 +541,21 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         )
         if message_decrypted is None:
             raise Exception("Internal Error")
+
         entry = {
             "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(),
-            "url": response_data["url"],
+            "pro": response_data["pro"],
             "mid": response_data["mid"],
+            "llm": response_data["llm"],
         }
         _key_cache[hashed_token] = entry
         ProxyRequestCounter.increment()
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": message_decrypted,
-                "fp_url": entry["url"],
+                "fp_pro": entry["pro"],
                 "fp_mid": entry["mid"],
+                "fp_llm": entry["llm"],
             },
             api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
