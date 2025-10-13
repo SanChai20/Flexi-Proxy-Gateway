@@ -47,17 +47,16 @@ class FlexiProxyCustomHandler(CustomLogger):
             "mcp_call",
         ],
     ):
-        if "fp_pro" not in user_api_key_dict.metadata or "fp_mid" not in user_api_key_dict.metadata or "fp_key" not in user_api_key_dict.metadata:  # type: ignore
+        if "fp_mid" not in user_api_key_dict.metadata or "fp_key" not in user_api_key_dict.metadata:  # type: ignore
             return "Internal Error"
 
-        pro = user_api_key_dict.metadata.pop("fp_pro", None)  # type: ignore
         mid = user_api_key_dict.metadata.pop("fp_mid", None)  # type: ignore
         key = user_api_key_dict.metadata.pop("fp_key", None)  # type: ignore
-        if not all([pro, mid, key]):
+        if not all([mid, key]):
             return "Internal Error"
 
         data["api_key"] = key
-        data["model"] = f"{pro}/{mid}"
+        data["model"] = mid
 
         llm = user_api_key_dict.metadata.pop("fp_llm", None)  # type: ignore
         if llm is not None and llm.strip():  # type: ignore

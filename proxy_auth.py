@@ -13,8 +13,8 @@ from cachetools import LRUCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from litellm import models_by_provider
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.utils import get_valid_models
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -183,14 +183,14 @@ class HTTPClient:
         self.session.mount("https://", adapter)
 
     def _request(
-        self, method: str, url: str, headers: Any, data: Any
+        self, method: str, url: str, headers: Any, json: Any
     ) -> requests.Response:
         return self.session.request(
-            method, url, timeout=self.timeout, headers=headers, json=data
+            method, url, timeout=self.timeout, headers=headers, json=json
         )
 
-    def post(self, url: str, headers: Any, data: Any) -> requests.Response:
-        return self._request("POST", url, headers, data)
+    def post(self, url: str, headers: Any, json: Any) -> requests.Response:
+        return self._request("POST", url, headers, json)
 
     def get(self, url: str, headers: Any) -> requests.Response:
         return self._request("GET", url, headers, None)
@@ -380,12 +380,10 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
-                # valid_models = get_valid_models()
-                # print(valid_models)
                 response: requests.Response = http_client.post(
                     url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
-                    data={
+                    json={
                         "url": Config.FP_PROXY_SERVER_URL,
                         "status": ProxyRequestCounter.status(),
                         "adv": Config.FP_PROXY_SERVER_ADVANCED == 1,
@@ -464,8 +462,24 @@ class TokenRotator:
         LoggerManager.info("Token cache cleared and background refresher stopped")
 
 
+def convert_sets_to_lists(obj):
+    if isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_sets_to_lists(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_sets_to_lists(v) for v in obj]
+    else:
+        return obj
+
+
 LoggerManager.init()
 http_client = HTTPClient()
+http_client.post(
+    f"{Config.FP_APP_BASE_URL}/api/{Config.FP_PROXY_SERVER_ID}/registry",
+    headers={"authorization": f"Bearer {Config.FP_APP_TOKEN_PASS}"},
+    json={"models_by_provider": convert_sets_to_lists(models_by_provider)},
+)
 HybridCrypto.unload()
 if not HybridCrypto.load():
     raise RuntimeError(
@@ -494,7 +508,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode(),
-                "fp_pro": cache_entry["pro"],
                 "fp_mid": cache_entry["mid"],
                 "fp_llm": cache_entry["llm"],
             },
@@ -520,7 +533,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
                 "authorization": f"Bearer {app_token}",
                 "X-API-Key": api_key,
             },
-            data={"public_key": HybridCrypto.asymmetric_public_key()},
+            json={"public_key": HybridCrypto.asymmetric_public_key()},
         )
         response.raise_for_status()
     except requests.RequestException:
@@ -537,7 +550,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
 
         entry = {
             "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(),
-            "pro": response_data["pro"],
             "mid": response_data["mid"],
             "llm": response_data["llm"],
         }
@@ -546,7 +558,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": message_decrypted,
-                "fp_pro": entry["pro"],
                 "fp_mid": entry["mid"],
                 "fp_llm": entry["llm"],
             },
