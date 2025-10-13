@@ -9,6 +9,7 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+import litellm
 import requests
 from cachetools import LRUCache
 from cryptography.fernet import Fernet
@@ -192,14 +193,14 @@ class HTTPClient:
         self.session.mount("https://", adapter)
 
     def _request(
-        self, method: str, url: str, headers: Any, data: Any
+        self, method: str, url: str, headers: Any, json: Any
     ) -> requests.Response:
         return self.session.request(
-            method, url, timeout=self.timeout, headers=headers, json=data
+            method, url, timeout=self.timeout, headers=headers, json=json
         )
 
-    def post(self, url: str, headers: Any, data: Any) -> requests.Response:
-        return self._request("POST", url, headers, data)
+    def post(self, url: str, headers: Any, json: Any) -> requests.Response:
+        return self._request("POST", url, headers, json)
 
     def get(self, url: str, headers: Any) -> requests.Response:
         return self._request("GET", url, headers, None)
@@ -389,10 +390,12 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
+                # print(litellm.provider_list)
+
                 response: requests.Response = http_client.post(
                     url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
-                    data={
+                    json={
                         "url": Config.FP_PROXY_SERVER_URL,
                         "status": ProxyRequestCounter.status(),
                         "adv": Config.FP_PROXY_SERVER_ADVANCED == 1,
@@ -501,7 +504,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode(),
-                "fp_pro": cache_entry["pro"],
                 "fp_mid": cache_entry["mid"],
                 "fp_llm": cache_entry["llm"],
             },
@@ -527,7 +529,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
                 "authorization": f"Bearer {app_token}",
                 "X-API-Key": api_key,
             },
-            data={"public_key": HybridCrypto.asymmetric_public_key()},
+            json={"public_key": HybridCrypto.asymmetric_public_key()},
         )
         response.raise_for_status()
     except requests.RequestException:
@@ -544,7 +546,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
 
         entry = {
             "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(),
-            "pro": response_data["pro"],
             "mid": response_data["mid"],
             "llm": response_data["llm"],
         }
@@ -553,7 +554,6 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         return UserAPIKeyAuth(
             metadata={
                 "fp_key": message_decrypted,
-                "fp_pro": entry["pro"],
                 "fp_mid": entry["mid"],
                 "fp_llm": entry["llm"],
             },
