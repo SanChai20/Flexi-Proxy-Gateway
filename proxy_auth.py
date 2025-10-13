@@ -9,13 +9,13 @@ from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-import litellm
 import requests
 from cachetools import LRUCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from dotenv import load_dotenv
+from litellm import models_by_provider
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -390,8 +390,6 @@ class TokenRotator:
             success_token: Optional[str] = None
             new_expires_at: float = 0
             try:
-                # print(litellm.provider_list)
-
                 response: requests.Response = http_client.post(
                     url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
                     headers={"authorization": f"Bearer {current_token}"},
@@ -474,8 +472,24 @@ class TokenRotator:
         LoggerManager.info("Token cache cleared and background refresher stopped")
 
 
+def convert_sets_to_lists(obj):
+    if isinstance(obj, set):
+        return list(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_sets_to_lists(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_sets_to_lists(v) for v in obj]
+    else:
+        return obj
+
+
 LoggerManager.init()
 http_client = HTTPClient()
+http_client.post(
+    f"{Config.FP_APP_BASE_URL}/api/{Config.FP_PROXY_SERVER_ID}/registry",
+    headers={"authorization": f"Bearer {Config.FP_APP_TOKEN_PASS}"},
+    json={"models_by_provider": convert_sets_to_lists(models_by_provider)},
+)
 HybridCrypto.unload()
 if not HybridCrypto.load():
     raise RuntimeError(
