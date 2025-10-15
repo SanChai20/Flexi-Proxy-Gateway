@@ -131,7 +131,7 @@ export LITELLM_MODE=PRODUCTION
 export NO_DOCS=True
 export NO_REDOC=True
 
-read -p "[FP_APP_BASE_URL] APP base url [https://*] (Recommend skipping DNS resolution): " FP_APP_BASE_URL
+read -p "[FP_APP_BASE_URL] APP base url [https://www.*] (Recommend skipping DNS resolution): " FP_APP_BASE_URL
 export FP_APP_BASE_URL
 
 read -p "[FP_APP_TOKEN_PASS] Issued by flexi-proxy admin/token-issuance.ts: " FP_APP_TOKEN_PASS
