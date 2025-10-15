@@ -2,6 +2,12 @@
 # Model List - Simplified with Wildcard
 # ============================================================================
 model_list:
+  # DeepSeek with reasoning support
+  - model_name: deepseek/*
+    litellm_params:
+      model: deepseek/*
+      supports_response_schema: True # Enable schema validation
+
   # Universal wildcard - all models will be handled by pre_call_hook
   - model_name: "*"
     litellm_params:
