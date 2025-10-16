@@ -68,8 +68,8 @@ class Config:
     FP_LOG_FILE: str = os.getenv("FP_LOG_FILE", "proxy_auth.log")
     FP_LOG_BACKUP_COUNT: int = int(os.getenv("FP_LOG_BACKUP_COUNT", "7"))
 
-    FP_DIAG: int = int(os.getenv("FP_DIAG", "0"))
-    FP_DIAG_SLOW_MS: int = int(os.getenv("FP_DIAG_SLOW_MS", "100"))
+    FP_DIAG: int = int(os.getenv("FP_DIAG", "1"))
+    FP_DIAG_SLOW_MS: int = int(os.getenv("FP_DIAG_SLOW_MS", "20"))
     FP_DIAG_SAMPLE_RATE: float = float(os.getenv("FP_DIAG_SAMPLE_RATE", "1.0"))
 
     @classmethod
@@ -272,7 +272,8 @@ class Diag:
             yield
         finally:
             dt = (time.perf_counter() - t0) * 1000.0
-            LoggerManager.info(f"[DIAG][STAGE] req={req_id} {title} dt_ms={dt:.1f}")
+            if Diag._should_sample() and dt >= Diag._slow_ms:
+                LoggerManager.warn(f"[DIAG][STAGE] req={req_id} {title} dt_ms={dt:.1f}")
 
     @classmethod
     def new_req_id(cls) -> int:
