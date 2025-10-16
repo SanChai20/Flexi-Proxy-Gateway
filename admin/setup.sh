@@ -117,6 +117,7 @@ echo "=============Launch - Settings environment variables BEGIN============="
 
 export FP_PROXY_SERVER_URL="https://$CUSTOMIZE_SUBDOMAIN_NAME"
 export FP_PROXY_SERVER_ID=$(expr match "$CUSTOMIZE_SUBDOMAIN_NAME" '\([^\.]*\)\..*')
+export FP_APP_BASE_URL="https://www.flexiproxy.com"
 export FP_LRU_MAX_CACHE_SIZE=2000
 export FP_HTTP_CONNECT_TIMEOUT_LIMIT=5
 export FP_HTTP_READ_TIMEOUT_LIMIT=120
@@ -130,9 +131,6 @@ export LITELLM_DROP_PARAMS=True
 export LITELLM_MODE=PRODUCTION
 export NO_DOCS=True
 export NO_REDOC=True
-
-read -p "[FP_APP_BASE_URL] APP base url [https://www.*] (Recommend skipping DNS resolution): " FP_APP_BASE_URL
-export FP_APP_BASE_URL
 
 read -p "[FP_APP_TOKEN_PASS] Issued by flexi-proxy admin/token-issuance.ts: " FP_APP_TOKEN_PASS
 export FP_APP_TOKEN_PASS

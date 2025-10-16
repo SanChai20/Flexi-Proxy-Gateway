@@ -1,4 +1,3 @@
-# proxy_auth.py - Optimized Production Version
 import base64
 import hashlib
 import logging
@@ -101,6 +100,88 @@ class Config:
             raise ValueError("FP_PROXY_SERVER_URL must be a valid HTTP(S) URL")
 
 
+class LoggerManager:
+    """Lightweight logger with minimal overhead."""
+
+    _logger: Optional[logging.Logger] = None
+    _lock: threading.Lock = threading.Lock()
+
+    @classmethod
+    def init(
+        cls,
+        log_file: str = "proxy_auth.log",
+        log_dir: str = "./logs",
+        level: str = "WARNING",
+        when: str = "midnight",
+        interval: int = 1,
+        backup_count: int = 7,
+    ) -> None:
+        if cls._logger is not None:
+            return
+
+        with cls._lock:
+            if cls._logger is not None:
+                return
+
+            numeric_level = getattr(logging, level.upper(), logging.WARNING)
+
+            root_logger = logging.getLogger()
+            root_logger.handlers.clear()
+            root_logger.setLevel(numeric_level)
+
+            formatter = logging.Formatter(
+                "%(asctime)s - %(levelname)s - %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+
+            # Ensure log directory exists
+            log_path = Path(log_dir)
+            log_path.mkdir(parents=True, exist_ok=True)
+
+            # Single file handler
+            file_path = log_path / log_file
+            file_handler = TimedRotatingFileHandler(
+                file_path,
+                when=when,
+                interval=interval,
+                backupCount=backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setFormatter(formatter)
+            file_handler.setLevel(numeric_level)
+            root_logger.addHandler(file_handler)
+
+            cls._logger = logging.getLogger(__name__)
+            cls._logger.info("Logger initialized")
+
+    @classmethod
+    def _ensure_logger(cls) -> logging.Logger:
+        if cls._logger is None:
+            cls.init(
+                log_file=Config.FP_LOG_FILE,
+                log_dir=Config.FP_LOG_DIR,
+                level=Config.FP_LOG_LEVEL,
+                backup_count=Config.FP_LOG_BACKUP_COUNT,
+            )
+        return cls._logger  # type: ignore
+
+    @classmethod
+    def info(cls, msg: str) -> None:
+        cls._ensure_logger().info(msg)
+
+    @classmethod
+    def warn(cls, msg: str) -> None:
+        cls._ensure_logger().warning(msg)
+
+    @classmethod
+    def error(cls, msg: str, exc_info: bool = False) -> None:
+        cls._ensure_logger().error(msg, exc_info=exc_info)
+
+    @classmethod
+    def debug(cls, msg: str) -> None:
+        cls._ensure_logger().debug(msg)
+
+
 class Diag:
     _enabled = False
     _slow_ms = 100
@@ -196,88 +277,6 @@ class Diag:
     @classmethod
     def new_req_id(cls) -> int:
         return next(cls._req_id_counter)
-
-
-class LoggerManager:
-    """Lightweight logger with minimal overhead."""
-
-    _logger: Optional[logging.Logger] = None
-    _lock: threading.Lock = threading.Lock()
-
-    @classmethod
-    def init(
-        cls,
-        log_file: str = "proxy_auth.log",
-        log_dir: str = "./logs",
-        level: str = "WARNING",
-        when: str = "midnight",
-        interval: int = 1,
-        backup_count: int = 7,
-    ) -> None:
-        if cls._logger is not None:
-            return
-
-        with cls._lock:
-            if cls._logger is not None:
-                return
-
-            numeric_level = getattr(logging, level.upper(), logging.WARNING)
-
-            root_logger = logging.getLogger()
-            root_logger.handlers.clear()
-            root_logger.setLevel(numeric_level)
-
-            formatter = logging.Formatter(
-                "%(asctime)s - %(levelname)s - %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
-
-            # Ensure log directory exists
-            log_path = Path(log_dir)
-            log_path.mkdir(parents=True, exist_ok=True)
-
-            # Single file handler
-            file_path = log_path / log_file
-            file_handler = TimedRotatingFileHandler(
-                file_path,
-                when=when,
-                interval=interval,
-                backupCount=backup_count,
-                encoding="utf-8",
-            )
-            file_handler.setFormatter(formatter)
-            file_handler.setLevel(numeric_level)
-            root_logger.addHandler(file_handler)
-
-            cls._logger = logging.getLogger(__name__)
-            cls._logger.info("Logger initialized")
-
-    @classmethod
-    def _ensure_logger(cls) -> logging.Logger:
-        if cls._logger is None:
-            cls.init(
-                log_file=Config.FP_LOG_FILE,
-                log_dir=Config.FP_LOG_DIR,
-                level=Config.FP_LOG_LEVEL,
-                backup_count=Config.FP_LOG_BACKUP_COUNT,
-            )
-        return cls._logger  # type: ignore
-
-    @classmethod
-    def info(cls, msg: str) -> None:
-        cls._ensure_logger().info(msg)
-
-    @classmethod
-    def warn(cls, msg: str) -> None:
-        cls._ensure_logger().warning(msg)
-
-    @classmethod
-    def error(cls, msg: str, exc_info: bool = False) -> None:
-        cls._ensure_logger().error(msg, exc_info=exc_info)
-
-    @classmethod
-    def debug(cls, msg: str) -> None:
-        cls._ensure_logger().debug(msg)
 
 
 class ProxyRequestCounter:
@@ -799,7 +798,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         Diag.stage_timer("total", req_id) if Config.FP_DIAG == 1 else nullcontext()
     )
     with total_cm:
-        # 1) cache 查找
+        # 1) cache lookup
         cache_cm: ContextManager[None] = (
             Diag.stage_timer("cache_lookup", req_id)
             if Config.FP_DIAG == 1
