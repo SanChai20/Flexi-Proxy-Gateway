@@ -1,9 +1,10 @@
-# proxy_auth.py - Optimized Production Version
+import asyncio
 import base64
 import hashlib
 import logging
 import os
 import signal
+import socket
 import sys
 import threading
 import time
@@ -53,6 +54,32 @@ class Config:
     FP_HTTP_MAX_RETRY_COUNT: int = int(os.getenv("FP_HTTP_MAX_RETRY_COUNT", "2"))
     FP_HTTP_RETRY_BACKOFF: float = float(os.getenv("FP_HTTP_RETRY_BACKOFF", "0.2"))
     FP_HTTP_POOL_MAX_SIZE: int = int(os.getenv("FP_HTTP_POOL_MAX_SIZE", "100"))
+    FP_HTTP_POOL_BLOCK: int = int(os.getenv("FP_HTTP_POOL_BLOCK", "1"))
+    FP_FORCE_IPV4: int = int(os.getenv("FP_FORCE_IPV4", "0"))
+
+    # TCP socket tuning (all optional, safe defaults keep behavior unchanged)
+    FP_TCP_NODELAY: int = int(os.getenv("FP_TCP_NODELAY", "1"))  # 1=enable Nagle off
+    FP_TCP_KEEPALIVE: int = int(
+        os.getenv("FP_TCP_KEEPALIVE", "1")
+    )  # 1=enable SO_KEEPALIVE
+    FP_TCP_KEEPIDLE_SECS: int = int(
+        os.getenv("FP_TCP_KEEPIDLE_SECS", "30")
+    )  # idle before probes
+    FP_TCP_KEEPINTVL_SECS: int = int(
+        os.getenv("FP_TCP_KEEPINTVL_SECS", "10")
+    )  # interval between probes
+    FP_TCP_KEEPCNT: int = int(
+        os.getenv("FP_TCP_KEEPCNT", "5")
+    )  # probe count before drop
+    FP_TCP_FASTOPEN: int = int(
+        os.getenv("FP_TCP_FASTOPEN", "0")
+    )  # 1=enable if kernel/path supports
+    FP_TCP_NOTSENT_LOWAT: int = int(
+        os.getenv("FP_TCP_NOTSENT_LOWAT", "0")
+    )  # 0=disabled; >0 to enable
+    FP_TCP_MAXSEG: int = int(
+        os.getenv("FP_TCP_MAXSEG", "0")
+    )  # 0=default; >0 to bound MSS
 
     # Token Rotation
     FP_TOKEN_REFRESH_INTERVAL: int = int(os.getenv("FP_TOKEN_REFRESH_INTERVAL", "60"))
@@ -236,6 +263,120 @@ class TimestampedLRUCache(LRUCache):
         return lru_key, lru_value
 
 
+def _build_socket_options() -> list[tuple[int, int, int]]:
+    """
+    Cross-platform TCP socket options with platform/version guards.
+    Defaults are conservative to keep behavior unchanged; enable via Config.
+    """
+    opts: list[tuple[int, int, int]] = []
+
+    # Always safe to try SO_KEEPALIVE (if enabled via config)
+    if Config.FP_TCP_KEEPALIVE:
+        try:
+            opts.append((socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1))
+        except Exception:
+            pass
+
+    # Disable Nagle for lower latency on small requests
+    if Config.FP_TCP_NODELAY and hasattr(socket, "TCP_NODELAY"):
+        try:
+            opts.append((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1))
+        except Exception:
+            pass
+
+    # Keepalive platform specifics
+    # Linux/BSD usually: TCP_KEEPIDLE/KEEPINTVL/KEEPCNT
+    if hasattr(socket, "TCP_KEEPIDLE") and sys.platform != "darwin":
+        try:
+            opts.append(
+                (socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, Config.FP_TCP_KEEPIDLE_SECS)
+            )
+        except Exception:
+            pass
+
+    if hasattr(socket, "TCP_KEEPINTVL"):
+        try:
+            opts.append(
+                (socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, Config.FP_TCP_KEEPINTVL_SECS)
+            )
+        except Exception:
+            pass
+
+    if hasattr(socket, "TCP_KEEPCNT"):
+        try:
+            opts.append((socket.IPPROTO_TCP, socket.TCP_KEEPCNT, Config.FP_TCP_KEEPCNT))
+        except Exception:
+            pass
+
+    # macOS: Python 3.10+ exposes TCP_KEEPALIVE as idle seconds
+    # guard: sys.version_info >= (3,10) and platform == darwin
+    if sys.platform == "darwin" and hasattr(socket, "TCP_KEEPALIVE"):
+        try:
+            opts.append(
+                (socket.IPPROTO_TCP, socket.TCP_KEEPALIVE, Config.FP_TCP_KEEPIDLE_SECS)
+            )
+        except Exception:
+            pass
+
+    # Optional: TCP Fast Open (client side)
+    # Linux >= 4.11 prefers TCP_FASTOPEN_CONNECT; fallback to TCP_FASTOPEN if available.
+    # if Config.FP_TCP_FASTOPEN:
+    #     try:
+    #         if hasattr(socket, "TCP_FASTOPEN_CONNECT"):
+    #             opts.append((socket.IPPROTO_TCP, socket.TCP_FASTOPEN_CONNECT, 1))
+    #         elif hasattr(socket, "TCP_FASTOPEN"):
+    #             # On some platforms, TCP_FASTOPEN toggles client/server behavior via bit flags.
+    #             opts.append((socket.IPPROTO_TCP, socket.TCP_FASTOPEN, 1))
+    #     except Exception:
+    #         # Some kernels or middleboxes may block TFO; keep silent fallback.
+    #         pass
+
+    # Optional: NOTSENT_LOWAT (reduce head-of-line blocking for buffered data)
+    if (
+        Config.FP_TCP_NOTSENT_LOWAT > 0
+        and hasattr(socket, "TCP_NOTSENT_LOWAT")
+        and sys.platform != "win32"
+    ):
+        try:
+            opts.append(
+                (
+                    socket.IPPROTO_TCP,
+                    socket.TCP_NOTSENT_LOWAT,
+                    Config.FP_TCP_NOTSENT_LOWAT,
+                )
+            )
+        except Exception:
+            pass
+
+    # Optional: clamp MSS if you know the path MTU; otherwise keep default (0)
+    if Config.FP_TCP_MAXSEG > 0 and hasattr(socket, "TCP_MAXSEG"):
+        try:
+            opts.append((socket.IPPROTO_TCP, socket.TCP_MAXSEG, Config.FP_TCP_MAXSEG))
+        except Exception:
+            pass
+
+    return opts
+
+
+class TunedHTTPAdapter(HTTPAdapter):
+    """HTTPAdapter with tuned socket options and pool behavior."""
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        pool_kwargs = dict(pool_kwargs or {})
+        sock_opts = pool_kwargs.get("socket_options", [])  # type: ignore
+        sock_opts.extend(_build_socket_options())  # type: ignore
+        pool_kwargs["socket_options"] = sock_opts
+        super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)  # type: ignore
+
+    def proxy_manager_for(self, proxy, **proxy_kwargs):
+        # Ensure proxy pools also inherit socket options
+        proxy_kwargs = dict(proxy_kwargs or {})
+        sock_opts = proxy_kwargs.get("socket_options", [])  # type: ignore
+        sock_opts.extend(_build_socket_options())  # type: ignore
+        proxy_kwargs["socket_options"] = sock_opts
+        return super().proxy_manager_for(proxy, **proxy_kwargs)  # type: ignore
+
+
 class HTTPClient:
     """Optimized HTTP client with connection pooling."""
 
@@ -251,20 +392,37 @@ class HTTPClient:
     def _create_session(self) -> requests.Session:
         session = requests.Session()
 
+        # Avoid reading proxies/certs from env, which may introduce unexpected DNS/proxy hops.
+        session.trust_env = False
+
         retry_strategy = Retry(
             total=Config.FP_HTTP_MAX_RETRY_COUNT,
             backoff_factor=Config.FP_HTTP_RETRY_BACKOFF,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
             raise_on_status=False,
+            respect_retry_after_header=True,
         )
 
-        adapter = HTTPAdapter(
+        adapter = TunedHTTPAdapter(
             max_retries=retry_strategy,
             pool_connections=Config.FP_HTTP_MAX_POOL_CONNECTIONS_COUNT,
             pool_maxsize=Config.FP_HTTP_POOL_MAX_SIZE,
-            pool_block=False,
+            pool_block=bool(Config.FP_HTTP_POOL_BLOCK),
         )
+
+        # Optional: force IPv4 if your IPv6 path is flaky/slow
+        if Config.FP_FORCE_IPV4 == 1:
+            try:
+                # Works for urllib3 v1/v2
+                from urllib3.util import connection as urllib3_connection
+
+                def _allowed_gai_family():
+                    return socket.AF_INET
+
+                urllib3_connection.allowed_gai_family = _allowed_gai_family
+            except Exception as e:
+                LoggerManager.warn(f"Failed to force IPv4 resolution: {e}")
 
         session.mount("http://", adapter)
         session.mount("https://", adapter)
@@ -402,6 +560,7 @@ class TokenRotator:
 
     __slots__ = ()
     _lock = threading.RLock()
+    _cond = threading.Condition(_lock)
     _token_cache: Optional[bytes] = None
     _expires_at: float = 0
     _initial_exchange_done: bool = False
@@ -434,24 +593,33 @@ class TokenRotator:
                         cls._token_cache is None
                         or now > cls._expires_at - Config.FP_TOKEN_REFRESH_BUFFER
                     )
+                    if not should_refresh:
+                        continue
+                    if cls._rotating:
+                        # another rotation in progress, skip and let it notify
+                        continue
+                    cls._rotating = True
 
-                if should_refresh:
-                    try:
-                        success = cls._rotate_token()
+                try:
+                    success = cls._rotate_token()
 
+                    with cls._lock:
                         if success:
                             consecutive_failures = 0
                         else:
                             consecutive_failures += 1
+                except Exception as e:
+                    consecutive_failures += 1
+                    LoggerManager.error(f"Background token refresh error: {e}")
+                finally:
+                    with cls._lock:
+                        cls._rotating = False
+                        cls._cond.notify_all()  # wake up any waiters
 
-                        if consecutive_failures >= max_failures:
-                            LoggerManager.error(
-                                f"Token refresh failed {consecutive_failures} times consecutively"
-                            )
-
-                    except Exception as e:
-                        consecutive_failures += 1
-                        LoggerManager.error(f"Background token refresh error: {e}")
+                if consecutive_failures >= max_failures:
+                    LoggerManager.error(
+                        f"Token refresh failed {consecutive_failures} times consecutively"
+                    )
 
         if cls._background_thread is None or not cls._background_thread.is_alive():
             cls._stop_thread = False
@@ -483,35 +651,39 @@ class TokenRotator:
                 if not cls._initial_exchange_done and cls._initial_failed:
                     return Config.FP_APP_TOKEN_PASS
 
-                # Wait if another thread is rotating
+                # If a rotation is in progress, wait for it to complete
                 if cls._rotating:
-                    # Simple wait without condition variable
-                    pass
-                else:
-                    cls._rotating = True
+                    cls._cond.wait(timeout=2.0)
+                    # loop and re-check state
+                    continue
 
-            if cls._rotating:
-                try:
-                    success = cls._rotate_token()
-                    if success:
-                        with cls._lock:
-                            if cls._token_cache is not None:
-                                return HybridCrypto.symmetric_decrypt(
-                                    cls._token_cache
-                                ).decode("utf-8")
-                    else:
-                        if not cls._initial_exchange_done:
-                            cls._initial_failed = True
-                            return Config.FP_APP_TOKEN_PASS
+                # Start rotation ourselves
+                cls._rotating = True
 
-                        if attempt < max_attempts:
-                            time.sleep(1)
-                            continue
-
-                        return None
-                finally:
+            # Do rotation outside lock
+            try:
+                success = cls._rotate_token()
+                if success:
                     with cls._lock:
-                        cls._rotating = False
+                        if cls._token_cache is not None:
+                            return HybridCrypto.symmetric_decrypt(
+                                cls._token_cache
+                            ).decode("utf-8")
+                else:
+                    if not cls._initial_exchange_done:
+                        with cls._lock:
+                            cls._initial_failed = True
+                        return Config.FP_APP_TOKEN_PASS
+
+                    if attempt < max_attempts:
+                        time.sleep(1)
+                        continue
+
+                    return None
+            finally:
+                with cls._lock:
+                    cls._rotating = False
+                    cls._cond.notify_all()
 
         return None
 
@@ -555,8 +727,11 @@ class TokenRotator:
 
             with cls._lock:
                 cls._token_cache = HybridCrypto.symmetric_encrypt(new_token)
+                # store "absolute" expiry; we already subtract buffer here
                 cls._expires_at = (
-                    time.time() + expires_in - Config.FP_TOKEN_REFRESH_BUFFER
+                    time.time()
+                    + float(expires_in)
+                    - float(Config.FP_TOKEN_REFRESH_BUFFER)
                 )
                 cls._initial_exchange_done = True
                 cls._initial_failed = False
@@ -579,6 +754,7 @@ class TokenRotator:
             cls._token_cache = None
             cls._expires_at = 0
             cls._stop_thread = True
+            cls._cond.notify_all()
 
         if cls._background_thread and cls._background_thread.is_alive():
             cls._background_thread.join(timeout=5)
@@ -675,6 +851,8 @@ _key_cache: TimestampedLRUCache = TimestampedLRUCache(
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
     """
     Custom authentication hook for LiteLLM - Optimized version.
+    - Avoids blocking the event loop by running requests in a thread via asyncio.to_thread.
+    - Optimistic single-POST validate when server supports it, with automatic fallback to GET+POST.
     """
 
     if not api_key:
@@ -704,29 +882,52 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     if not app_token:
         raise RuntimeError("Failed to obtain app token")
 
-    # Validate API key with backend
+    # Validate API key with backend (non-blocking for async loop)
     try:
         headers = {
             "authorization": f"Bearer {app_token}",
             "X-API-Key": api_key,
         }
 
-        # Initial validation
-        response = http_client.get(
-            f"{Config.FP_APP_BASE_URL}/api/auth/validate",
-            headers=headers,
-        )
-        response.raise_for_status()
-
-        # Get encrypted key
-        response = http_client.post(
+        # Optimistically attempt single POST (if backend supports returning enc directly)
+        response = await asyncio.to_thread(
+            http_client.post,
             f"{Config.FP_APP_BASE_URL}/api/auth/validate",
             headers=headers,
             json={"public_key": HybridCrypto.asymmetric_public_key()},
         )
-        response.raise_for_status()
 
-        response_data = response.json()
+        use_fallback = False
+        response_data: Dict[str, Any] = {}
+        if response.status_code == 200:
+            try:
+                response_data = response.json()
+                if "enc" not in response_data:
+                    use_fallback = True
+            except Exception:
+                use_fallback = True
+        else:
+            # If 401/403 etc., let the error handling below process after fallback path
+            use_fallback = True
+
+        if use_fallback:
+            # Step 1: GET validate
+            response = await asyncio.to_thread(
+                http_client.get,
+                f"{Config.FP_APP_BASE_URL}/api/auth/validate",
+                headers=headers,
+            )
+            response.raise_for_status()
+
+            # Step 2: POST to get encrypted key
+            response = await asyncio.to_thread(
+                http_client.post,
+                f"{Config.FP_APP_BASE_URL}/api/auth/validate",
+                headers=headers,
+                json={"public_key": HybridCrypto.asymmetric_public_key()},
+            )
+            response.raise_for_status()
+            response_data = response.json()
 
         # Decrypt the key
         message_bytes = base64.b64decode(response_data["enc"])
