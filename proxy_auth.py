@@ -42,7 +42,7 @@ class Config:
     FP_PROXY_SERVER_FERNET_KEY: str = os.getenv("FP_PROXY_SERVER_FERNET_KEY", "")
 
     # LRU Cache
-    FP_LRU_MAX_CACHE_SIZE: int = int(os.getenv("FP_LRU_MAX_CACHE_SIZE", "2000"))
+    FP_LRU_MAX_CACHE_SIZE: int = int(os.getenv("FP_LRU_MAX_CACHE_SIZE", "1000"))
 
     # HTTP - Production-optimized defaults
     FP_HTTP_MAX_POOL_CONNECTIONS_COUNT: int = int(
