@@ -83,5 +83,3 @@ general_settings:
 
   # Health Check
   # health_check_interval: 60
-  background_health_checks: True
-  health_check_interval: 60
