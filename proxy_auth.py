@@ -896,10 +896,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
                     "authorization": f"Bearer {app_token}",
                     "X-API-Key": api_key,
                 },
-                json={
-                    "public_key": HybridCrypto.asymmetric_public_key(),
-                    "validate_and_encrypt": True,
-                },
+                json={"public_key": HybridCrypto.asymmetric_public_key()},
             )
             response.raise_for_status()
             response_data = response.json()
