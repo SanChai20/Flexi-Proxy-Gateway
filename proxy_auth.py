@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager, nullcontext
+from datetime import datetime
 from itertools import count
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
@@ -506,137 +507,135 @@ class HybridCrypto:
 class TokenRotator:
     """Optimized token rotation with background refresh."""
 
-    __slots__ = ()
-    _lock = threading.RLock()
-    _token_cache: Optional[bytes] = None
-    _expires_at: float = 0
-    _initial_exchange_done: bool = False
-    _initial_failed: bool = False
-    _rotating: bool = False
-    _stop_thread: bool = False
-    _background_thread: Optional[threading.Thread] = None
+    def __init__(
+        self,
+        base_url: str,
+        initial_token: str,
+        refresh_buffer: int = 300,
+        check_interval: int = 60,
+    ):
+        """
+        :param base_url: API base URL
+        :param initial_token: Initial token
+        :param refresh_buffer: Refresh token N seconds before expiry
+        :param check_interval: Background check interval in seconds
+        """
+        self._base_url = base_url
+        self._initial_token = initial_token
+        self._refresh_buffer = refresh_buffer
+        self._check_interval = check_interval
 
-    def __new__(cls):
-        raise TypeError(f"{cls.__name__} may not be instantiated")
+        # Token state
+        self._token: Optional[str] = None
+        self._expires_at: float = 0
 
-    @classmethod
-    def background_refresh(cls, interval: int = 60) -> None:
-        """Start background token refresh thread."""
+        # Thread safety
+        self._lock = threading.RLock()
+        self._refresh_event = threading.Event()
 
-        def _refresher():
-            consecutive_failures = 0
-            max_failures = 3
+        # Background thread
+        self._background_thread: Optional[threading.Thread] = None
+        self._stop_flag = threading.Event()
 
-            while True:
-                with cls._lock:
-                    if cls._stop_thread:
-                        break
+        # Statistics
+        self._consecutive_failures = 0
+        self._max_failures = 3
 
-                time.sleep(interval)
+    def start(self) -> None:
+        """Start background refresh thread."""
+        if self._background_thread and self._background_thread.is_alive():
+            return
 
-                with cls._lock:
-                    now = time.time()
-                    should_refresh = (
-                        cls._token_cache is None
-                        or now > cls._expires_at - Config.FP_TOKEN_REFRESH_BUFFER
-                    )
-
-                if should_refresh:
-                    try:
-                        success = cls._rotate_token()
-
-                        if success:
-                            consecutive_failures = 0
-                        else:
-                            consecutive_failures += 1
-
-                        if consecutive_failures >= max_failures:
-                            LoggerManager.error(
-                                f"Token refresh failed {consecutive_failures} times consecutively"
-                            )
-
-                    except Exception as e:
-                        consecutive_failures += 1
-                        LoggerManager.error(f"Background token refresh error: {e}")
-
-        if cls._background_thread is None or not cls._background_thread.is_alive():
-            cls._stop_thread = False
-            cls._background_thread = threading.Thread(
-                target=_refresher, daemon=True, name="TokenRefresher"
-            )
-            cls._background_thread.start()
-
-    @classmethod
-    def token(cls) -> Optional[str]:
-        """Get current valid token, rotating if necessary."""
-
-        max_attempts = 3
-        attempt = 0
-
-        while attempt < max_attempts:
-            attempt += 1
-
-            with cls._lock:
-                now = time.time()
-
-                # Return cached token if valid
-                if cls._token_cache is not None and now < cls._expires_at:
-                    return HybridCrypto.symmetric_decrypt(cls._token_cache).decode(
-                        "utf-8"
-                    )
-
-                # Fallback for initial failure
-                if not cls._initial_exchange_done and cls._initial_failed:
-                    return Config.FP_APP_TOKEN_PASS
-
-                # Wait if another thread is rotating
-                if cls._rotating:
-                    # Simple wait without condition variable
-                    pass
-                else:
-                    cls._rotating = True
-
-            if cls._rotating:
-                try:
-                    success = cls._rotate_token()
-                    if success:
-                        with cls._lock:
-                            if cls._token_cache is not None:
-                                return HybridCrypto.symmetric_decrypt(
-                                    cls._token_cache
-                                ).decode("utf-8")
-                    else:
-                        if not cls._initial_exchange_done:
-                            cls._initial_failed = True
-                            return Config.FP_APP_TOKEN_PASS
-
-                        if attempt < max_attempts:
-                            time.sleep(1)
-                            continue
-
-                        return None
-                finally:
-                    with cls._lock:
-                        cls._rotating = False
-
-        return None
-
-    @classmethod
-    def _rotate_token(cls) -> bool:
-        """Perform actual token rotation. Returns True on success."""
-
-        current_token = (
-            HybridCrypto.symmetric_decrypt(cls._token_cache).decode("utf-8")
-            if cls._token_cache is not None
-            else Config.FP_APP_TOKEN_PASS
+        self._stop_flag.clear()
+        self._background_thread = threading.Thread(
+            target=self._background_refresh_loop,
+            daemon=True,
+            name="TokenRefresher",
         )
+        self._background_thread.start()
+        LoggerManager.info("Token rotator background thread started")
 
-        if not current_token:
-            return False
+    def stop(self) -> None:
+        """Stop background thread and clear cache."""
+        self._stop_flag.set()
+
+        if self._background_thread and self._background_thread.is_alive():
+            self._background_thread.join(timeout=5)
+
+        with self._lock:
+            self._token = None
+            self._expires_at = 0
+
+        LoggerManager.info("Token rotator stopped")
+
+    def get_token(self) -> Optional[str]:
+        """Get current valid token, refresh if necessary."""
+        with self._lock:
+            # Return cached token if still valid
+            if self._token and time.time() < self._expires_at:
+                return self._token
+
+            # Use initial token if no valid token exists
+            if not self._token:
+                return self._initial_token
+
+        # Token expired, trigger refresh
+        if self._refresh_token_with_retry():
+            with self._lock:
+                return self._token
+
+        # Fallback to initial token if refresh failed
+        LoggerManager.warn("Using fallback initial token")
+        return self._initial_token
+
+    def _background_refresh_loop(self) -> None:
+        """Background thread loop for automatic token refresh."""
+        while not self._stop_flag.wait(self._check_interval):
+            try:
+                if self._should_refresh():
+                    self._refresh_token()
+            except Exception as e:
+                LoggerManager.error(f"Background refresh error: {e}")
+
+    def _should_refresh(self) -> bool:
+        """Check if token needs refresh."""
+        with self._lock:
+            if not self._token:
+                return True
+
+            time_until_expiry = self._expires_at - time.time()
+            return time_until_expiry <= self._refresh_buffer
+
+    def _refresh_token_with_retry(self, max_attempts: int = 3) -> bool:
+        """Refresh token with retry logic."""
+        for attempt in range(1, max_attempts + 1):
+            if self._refresh_token():
+                return True
+
+            if attempt < max_attempts:
+                wait_time = min(2**attempt, 10)
+                LoggerManager.warn(
+                    f"Token refresh attempt {attempt} failed, retrying in {wait_time}s"
+                )
+                time.sleep(wait_time)
+
+        LoggerManager.error(f"Token refresh failed after {max_attempts} attempts")
+        return False
+
+    def _refresh_token(self) -> bool:
+        """Perform actual token rotation. Thread-safe."""
+        with self._lock:
+            # Get current token for exchange
+            current_token = self._token if self._token else self._initial_token
+
+            if not current_token:
+                LoggerManager.error("No token available for rotation")
+                return False
 
         try:
+            # Perform rotation request (outside lock to avoid blocking)
             response = http_client.post(
-                url=f"{Config.FP_APP_BASE_URL}/api/auth/exchange",
+                url=f"{self._base_url}/api/auth/exchange",
                 headers={"authorization": f"Bearer {current_token}"},
                 json={
                     "url": Config.FP_PROXY_SERVER_URL,
@@ -648,8 +647,10 @@ class TokenRotator:
 
             if response.status_code != 200:
                 LoggerManager.error(
-                    f"Token rotation failed: HTTP {response.status_code}"
+                    f"Token rotation failed: HTTP {response.status_code}, "
+                    f"Response: {response.text[:200]}"
                 )
+                self._consecutive_failures += 1
                 return False
 
             data = response.json()
@@ -657,38 +658,83 @@ class TokenRotator:
             expires_in = data.get("expiresIn")
 
             if not new_token or expires_in is None:
+                LoggerManager.error(f"Invalid token response: {data}")
+                self._consecutive_failures += 1
                 return False
 
-            with cls._lock:
-                cls._token_cache = HybridCrypto.symmetric_encrypt(new_token)
-                cls._expires_at = (
-                    time.time() + expires_in - Config.FP_TOKEN_REFRESH_BUFFER
-                )
-                cls._initial_exchange_done = True
-                cls._initial_failed = False
+            # Update token cache
+            with self._lock:
+                self._token = new_token
+                self._expires_at = time.time() + expires_in - self._refresh_buffer
+                self._consecutive_failures = 0
 
-            LoggerManager.info(f"Token rotated successfully (expires in {expires_in}s)")
+            LoggerManager.info(
+                f"Token rotated successfully (expires in {expires_in}s, "
+                f"next refresh at {datetime.fromtimestamp(self._expires_at).strftime('%Y-%m-%d %H:%M:%S')})"
+            )
+
+            # Check for consecutive failures
+            if self._consecutive_failures >= self._max_failures:
+                LoggerManager.error(
+                    f"Token refresh failed {self._consecutive_failures} times consecutively"
+                )
+
             return True
 
+        except requests.Timeout:
+            LoggerManager.error("Token rotation request timeout")
+            self._consecutive_failures += 1
+            return False
         except requests.RequestException as e:
             LoggerManager.error(f"Token rotation request failed: {e}")
+            self._consecutive_failures += 1
             return False
         except Exception as e:
-            LoggerManager.error(f"Token rotation failed: {e}")
+            LoggerManager.error(f"Unexpected error during token rotation: {e}")
+            self._consecutive_failures += 1
             return False
 
-    @classmethod
-    def clear(cls) -> None:
-        """Clear token cache and stop background thread."""
+    @property
+    def is_healthy(self) -> bool:
+        """Check if token rotator is healthy."""
+        return self._consecutive_failures < self._max_failures
 
-        with cls._lock:
-            cls._token_cache = None
-            cls._expires_at = 0
-            cls._stop_thread = True
+    def get_status(self) -> dict:
+        """Get current status for monitoring."""
+        with self._lock:
+            time_until_expiry = max(0, self._expires_at - time.time())
+            return {
+                "has_token": self._token is not None,
+                "expires_in_seconds": int(time_until_expiry),
+                "consecutive_failures": self._consecutive_failures,
+                "is_healthy": self.is_healthy,
+                "background_thread_alive": (
+                    self._background_thread.is_alive()
+                    if self._background_thread
+                    else False
+                ),
+            }
 
-        if cls._background_thread and cls._background_thread.is_alive():
-            cls._background_thread.join(timeout=5)
-            cls._background_thread = None
+
+class EncryptedTokenRotator(TokenRotator):
+    """Token rotator with encrypted storage."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._encrypted_token: Optional[bytes] = None
+
+    @property
+    def _token(self) -> Optional[str]:
+        if self._encrypted_token is None:
+            return None
+        return HybridCrypto.symmetric_decrypt(self._encrypted_token).decode("utf-8")
+
+    @_token.setter
+    def _token(self, value: Optional[str]) -> None:
+        if value is None:
+            self._encrypted_token = None
+        else:
+            self._encrypted_token = HybridCrypto.symmetric_encrypt(value)
 
 
 def convert_sets_to_lists(obj: Any) -> Any:
@@ -701,20 +747,6 @@ def convert_sets_to_lists(obj: Any) -> Any:
     elif isinstance(obj, list):
         return [convert_sets_to_lists(v) for v in obj]
     return obj
-
-
-def graceful_shutdown(signum, frame):
-    """Handle graceful shutdown on SIGTERM/SIGINT."""
-    LoggerManager.info(f"Received signal {signum}, initiating graceful shutdown")
-
-    try:
-        TokenRotator.clear()
-        http_client.close()
-        LoggerManager.info("Graceful shutdown completed")
-    except Exception as e:
-        LoggerManager.error(f"Error during shutdown: {e}", exc_info=True)
-    finally:
-        sys.exit(0)
 
 
 # ============================================================================
@@ -738,11 +770,6 @@ LoggerManager.init(
 
 LoggerManager.info("=== Proxy Auth Module Initializing ===")
 LoggerManager.info(f"Proxy ID: {Config.FP_PROXY_SERVER_ID}")
-
-# Register signal handlers
-signal.signal(signal.SIGTERM, graceful_shutdown)
-signal.signal(signal.SIGINT, graceful_shutdown)
-
 
 # Enable diagnostics if requested
 if Config.FP_DIAG == 1:
@@ -773,8 +800,34 @@ if not HybridCrypto.load():
     sys.exit(1)
 
 # Initialize token rotation
-TokenRotator.clear()
-TokenRotator.background_refresh(interval=Config.FP_TOKEN_REFRESH_INTERVAL)
+token_rotator = EncryptedTokenRotator(
+    base_url=Config.FP_APP_BASE_URL,
+    initial_token=Config.FP_APP_TOKEN_PASS,
+    refresh_buffer=Config.FP_TOKEN_REFRESH_BUFFER,
+    check_interval=Config.FP_TOKEN_REFRESH_INTERVAL,
+)
+
+token_rotator.start()
+
+
+# Register signal handlers
+def graceful_shutdown(signum, frame):
+    """Handle graceful shutdown on SIGTERM/SIGINT."""
+    LoggerManager.info(f"Received signal {signum}, initiating graceful shutdown")
+
+    try:
+        token_rotator.stop()
+        http_client.close()
+        LoggerManager.info("Graceful shutdown completed")
+    except Exception as e:
+        LoggerManager.error(f"Error during shutdown: {e}", exc_info=True)
+    finally:
+        sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, graceful_shutdown)
+signal.signal(signal.SIGINT, graceful_shutdown)
+
 
 # Cache for API key validation
 _key_cache: TimestampedLRUCache = TimestampedLRUCache(
@@ -832,7 +885,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         )
         with token_cm:
             # Get current app token
-            app_token = TokenRotator.token()
+            app_token = token_rotator.get_token()
             if not app_token:
                 raise RuntimeError("Failed to obtain app token")
 
