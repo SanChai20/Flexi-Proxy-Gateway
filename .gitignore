@@ -214,3 +214,5 @@ app.log
 app.log.*
 logs
 nohup.out
+
+.claude
