@@ -213,3 +213,5 @@ litellm-cache
 app.log
 app.log.*
 logs
+
+.claude
