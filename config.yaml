@@ -2,12 +2,6 @@
 # Model List - Simplified with Wildcard
 # ============================================================================
 model_list:
-  # DeepSeek with reasoning support
-  - model_name: deepseek/*
-    litellm_params:
-      model: deepseek/*
-      supports_response_schema: True # Enable schema validation
-
   # Universal wildcard - all models will be handled by pre_call_hook
   - model_name: "*"
     litellm_params:
@@ -34,7 +28,7 @@ router_settings:
 # ============================================================================
 litellm_settings:
   # Timeouts
-  request_timeout: 1800 # 30 minutes for long-running requests
+  request_timeout: 600 # 10 minutes for long-running requests
 
   # Logging
   set_verbose: False # Disable verbose logging in production
@@ -45,13 +39,15 @@ litellm_settings:
 
   # Callbacks
   callbacks: proxy_handler.proxy_handler_instance
+  success_callback: []
+  failure_callback: []
 
   # Caching
-  cache: True
-  cache_params:
-    type: disk
-    disk_cache_dir: ./litellm-cache
-    ttl: 3600 # Cache TTL: 1 hour
+  # cache: True
+  # cache_params:
+  #   type: disk
+  #   disk_cache_dir: ./litellm-cache
+  #   ttl: 3600 # Cache TTL: 1 hour
 
   # Performance
   num_retries: 0 # Disable LiteLLM retries (use HTTP client retries)

@@ -357,17 +357,14 @@ class HTTPClient:
 
     def _create_session(self) -> requests.Session:
         session = requests.Session()
-
-        retry_strategy = Retry(
-            total=Config.FP_HTTP_MAX_RETRY_COUNT,
-            backoff_factor=Config.FP_HTTP_RETRY_BACKOFF,
-            status_forcelist=[429, 500, 502, 503, 504],
-            allowed_methods=["HEAD", "GET", "OPTIONS", "POST", "PUT", "DELETE"],
-            raise_on_status=False,
-        )
-
         adapter = HTTPAdapter(
-            max_retries=retry_strategy,
+            max_retries=Retry(
+                total=Config.FP_HTTP_MAX_RETRY_COUNT,
+                backoff_factor=Config.FP_HTTP_RETRY_BACKOFF,
+                status_forcelist=[502, 503, 504],
+                allowed_methods=["POST", "GET"],
+                raise_on_status=False,
+            ),
             pool_connections=Config.FP_HTTP_MAX_POOL_CONNECTIONS_COUNT,
             pool_maxsize=Config.FP_HTTP_POOL_MAX_SIZE,
             pool_block=False,
@@ -379,7 +376,7 @@ class HTTPClient:
         session.headers.update(
             {
                 "Connection": "keep-alive",
-                "Keep-Alive": "300",
+                "Keep-Alive": "timeout=300, max=1000",
                 "User-Agent": f"LiteLLM-Proxy/{Config.FP_PROXY_SERVER_ID}",
             }
         )
@@ -838,6 +835,20 @@ _key_cache: TimestampedLRUCache = TimestampedLRUCache(
 # ============================================================================
 # LiteLLM Auth Hook
 # ============================================================================
+_CACHE_TTL = 7200  # 2 hours
+
+
+class CacheEntry:
+    __slots__ = ("enc", "mid", "llm", "expires_at")
+
+    def __init__(self, enc: bytes, mid: str, llm: str, ttl: int = 3600):
+        self.enc = enc
+        self.mid = mid
+        self.llm = llm
+        self.expires_at = time.time() + ttl
+
+    def is_valid(self) -> bool:
+        return time.time() < self.expires_at
 
 
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
@@ -848,137 +859,83 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
     if not api_key:
         raise ValueError("API key is required")
     req_id = Diag.new_req_id() if Config.FP_DIAG == 1 else 0
-    total_cm: ContextManager[None] = (
-        Diag.stage_timer("total", req_id) if Config.FP_DIAG == 1 else nullcontext()
-    )
-    with total_cm:
-        # 1) cache lookup
-        cache_cm: ContextManager[None] = (
-            Diag.stage_timer("cache_lookup", req_id)
+    # cache lookup
+    # Hash API key for cache lookup
+    hashed_token = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    # Check cache first
+    cache_entry: CacheEntry | None = _key_cache[hashed_token]
+    if cache_entry and cache_entry.is_valid():
+        ProxyRequestCounter.increment()
+        return UserAPIKeyAuth(
+            metadata={
+                "fp_key": HybridCrypto.symmetric_decrypt(cache_entry.enc).decode(
+                    "utf-8"
+                ),
+                "fp_mid": cache_entry.mid,
+                "fp_llm": cache_entry.llm,
+            },
+            api_key=api_key,
+            user_role=LitellmUserRoles.CUSTOMER,
+        )
+    # Get current app token
+    app_token = token_rotator.get_token()
+    if not app_token:
+        raise RuntimeError("Failed to obtain app token")
+
+    # Validate API key with backend
+    try:
+        post_cm: ContextManager[None] = (
+            Diag.stage_timer("http_post", req_id)
             if Config.FP_DIAG == 1
             else nullcontext()
         )
-        with cache_cm:
-            # Hash API key for cache lookup
-            hashed_token = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-
-            # Check cache first
-            cache_entry = _key_cache[hashed_token]
-            if cache_entry is not None:
-                ProxyRequestCounter.increment()
-                return UserAPIKeyAuth(
-                    metadata={
-                        "fp_key": HybridCrypto.symmetric_decrypt(
-                            cache_entry["enc"]
-                        ).decode("utf-8"),
-                        "fp_mid": cache_entry["mid"],
-                        "fp_llm": cache_entry["llm"],
-                    },
-                    api_key=api_key,
-                    user_role=LitellmUserRoles.CUSTOMER,
-                )
-
-        token_cm: ContextManager[None] = (
-            Diag.stage_timer("token_get", req_id)
-            if Config.FP_DIAG == 1
-            else nullcontext()
-        )
-        with token_cm:
-            # Get current app token
-            app_token = token_rotator.get_token()
-            if not app_token:
-                raise RuntimeError("Failed to obtain app token")
-
-        # Validate API key with backend
-        try:
-            headers = {
-                "authorization": f"Bearer {app_token}",
-                "X-API-Key": api_key,
-            }
-
-            get_cm: ContextManager[None] = (
-                Diag.stage_timer("http_get", req_id)
-                if Config.FP_DIAG == 1
-                else nullcontext()
-            )
-            with get_cm:
-                # Initial validation
-                response = http_client.get(
-                    f"{Config.FP_APP_BASE_URL}/api/auth/validate",
-                    headers=headers,
-                )
-                response.raise_for_status()
-
-            post_cm: ContextManager[None] = (
-                Diag.stage_timer("http_post", req_id)
-                if Config.FP_DIAG == 1
-                else nullcontext()
-            )
-            with post_cm:
-                # Get encrypted key
-                response = http_client.post(
-                    f"{Config.FP_APP_BASE_URL}/api/auth/validate",
-                    headers=headers,
-                    json={"public_key": HybridCrypto.asymmetric_public_key()},
-                )
-                response.raise_for_status()
-
-                response_data = response.json()
-
-            decrypt_cm: ContextManager[None] = (
-                Diag.stage_timer("decrypt", req_id)
-                if Config.FP_DIAG == 1
-                else nullcontext()
-            )
-            with decrypt_cm:
-                # Decrypt the key
-                message_bytes = base64.b64decode(response_data["enc"])
-                message_decrypted = HybridCrypto.asymmetric_decrypt(message_bytes)
-
-                if not message_decrypted:
-                    raise ValueError("Failed to decrypt API key")
-
-                # Cache the result
-                entry = {
-                    "enc": HybridCrypto.symmetric_encrypt(message_decrypted).decode(
-                        "utf-8"
-                    ),
-                    "mid": response_data["mid"],
-                    "llm": response_data["llm"],
-                }
-                _key_cache[hashed_token] = entry
-
-            ProxyRequestCounter.increment()
-
-            return UserAPIKeyAuth(
-                metadata={
-                    "fp_key": message_decrypted,
-                    "fp_mid": entry["mid"],
-                    "fp_llm": entry["llm"],
+        with post_cm:
+            response = http_client.post(
+                f"{Config.FP_APP_BASE_URL}/api/auth/validate",
+                headers={
+                    "authorization": f"Bearer {app_token}",
+                    "X-API-Key": api_key,
                 },
-                api_key=api_key,
-                user_role=LitellmUserRoles.CUSTOMER,
+                json={
+                    "public_key": HybridCrypto.asymmetric_public_key(),
+                    "validate_and_encrypt": True,
+                },
             )
+            response.raise_for_status()
+            response_data = response.json()
 
-        except requests.HTTPError as e:
-            status_code = e.response.status_code if e.response else "unknown"
+        # Decrypt the key
+        message_bytes = base64.b64decode(response_data["enc"])
+        message_decrypted = HybridCrypto.asymmetric_decrypt(message_bytes)
+        if not message_decrypted:
+            raise ValueError("Failed to decrypt API key")
 
-            if status_code == 401:
-                raise ValueError("Invalid API key")
-            elif status_code == 403:
-                raise ValueError("Access forbidden")
-            else:
-                LoggerManager.error(f"Authentication service error: HTTP {status_code}")
-                raise RuntimeError("Authentication service error")
-
-        except requests.RequestException as e:
-            LoggerManager.error(f"API key validation request failed: {e}")
-            raise RuntimeError("Authentication service unavailable")
-
-        except (ValueError, KeyError) as e:
-            LoggerManager.error(f"API key validation failed: {e}")
+        # Cache the result
+        entry = CacheEntry(
+            enc=HybridCrypto.symmetric_encrypt(message_decrypted),
+            mid=response_data["mid"],
+            llm=response_data["llm"],
+            ttl=_CACHE_TTL,
+        )
+        _key_cache[hashed_token] = entry
+        ProxyRequestCounter.increment()
+        return UserAPIKeyAuth(
+            metadata={
+                "fp_key": message_decrypted,
+                "fp_mid": entry.mid,
+                "fp_llm": entry.llm,
+            },
+            api_key=api_key,
+            user_role=LitellmUserRoles.CUSTOMER,
+        )
+    except requests.HTTPError as e:
+        status_code = e.response.status_code if e.response else 0
+        if status_code == 401:
             raise ValueError("Invalid API key")
-
-        except Exception as e:
-            LoggerManager.error(f"Unexpected authentication error: {e}", exc_info=True)
-            raise RuntimeError("Authentication failed")
+        elif status_code == 403:
+            raise ValueError("Access forbidden")
+        else:
+            raise RuntimeError("Authentication service error")
+    except Exception as e:
+        LoggerManager.error(f"Auth error: {e}", exc_info=True)
+        raise RuntimeError("Authentication failed")
