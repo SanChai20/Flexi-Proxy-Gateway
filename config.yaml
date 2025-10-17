@@ -14,9 +14,10 @@ model_list:
 # ============================================================================
 router_settings:
   routing_strategy: simple-shuffle
-  cooldown_time: 0 # No cooldown needed for single wildcard model
+  cooldown_time: 5
   num_retries: 0 # Retries handled by HTTP client layer
-  timeout: 600 # Match request_timeout
+  timeout: 300
+  retry_after: 1
 
   # Redis for distributed routing (optional, for multi-instance)
   # redis_host: localhost
@@ -67,6 +68,9 @@ general_settings:
   # Custom Authentication
   custom_auth: proxy_auth.user_api_key_auth
 
+  max_parallel_requests: 20
+  global_max_parallel_requests: 300
+
   # Database (optional - for persistent key management)
   # database_url: ${DATABASE_URL}
   # database_type: postgresql
@@ -79,3 +83,5 @@ general_settings:
 
   # Health Check
   # health_check_interval: 60
+  background_health_checks: True
+  health_check_interval: 60
