@@ -12,7 +12,7 @@ EXTRA_QUERY_PARAMS="teamId=$VERCEL_TEAM_ID"
 
 
 # Create A record
-PUBLIC_IP=$(curl -s ifconfig.me)
+PUBLIC_IP=$(curl -s -4 ifconfig.me)
 curl -s -X POST "https://api.vercel.com/v2/domains/$DOMAIN/records?$EXTRA_QUERY_PARAMS" \
      -H     "Authorization: Bearer $VERCEL_ACCESS_TOKEN" \
      -H     "Content-Type: application/json" \
