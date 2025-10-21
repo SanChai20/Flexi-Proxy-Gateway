@@ -11,6 +11,8 @@ export YOUR_DOMAIN
 read -p "[YOUR_SUBDOMAIN] Subdomain (e.g. api.example.com): " YOUR_SUBDOMAIN
 export YOUR_SUBDOMAIN
 
+export LITELLM_SERVER_PORT=4000
+
 if [ -d "acme.sh" ] && [ -f "acme.sh/acme.sh" ]; then
     echo "acme.sh is already installed, skipping installation..."
     ACME_SH="acme.sh/acme.sh"
@@ -36,12 +38,28 @@ if [[ "$DEPLOY_CERT" == "y" || "$DEPLOY_CERT" == "Y" ]]; then
     read -p "[CF_Zone_ID] Cloudflare zone id (https://dash.cloudflare.com/): " CF_Zone_ID
     export CF_Zone_ID
 
+    # add A record for YOUR_SUBDOMAIN to point to YOUR_SERVER_IP
+    YOUR_SERVER_IP=$(curl -s -4 ifconfig.me)
+
+    TXTRECORD_ID=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_Zone_ID/dns_records" \
+     -H     "Authorization: Bearer $CF_Token" \
+     -H     "Content-Type: application/json" \
+     --data '{"type":"TXT","name":"'"$CREATE_DOMAIN"'","value":"'"$CERTBOT_VALIDATION"'","ttl":120,"comment":"'"temp"'"}' \
+             | python -c "import sys,json;print(json.load(sys.stdin)['uid'])")
+
+
+
+
+
+
+
+
     echo "Issuing cert..."
     $ACME_SH --issue --dns dns_cf -d $YOUR_DOMAIN -d $YOUR_SUBDOMAIN
 
 fi
 
-CERT_DIR="/etc/nginx/ssl"
+CERT_DIR="/etc/nginx/ssl/$YOUR_SUBDOMAIN"
 sudo mkdir -p "$CERT_DIR"
 echo ""
 echo "Installing cert on nginx..."
@@ -76,7 +94,7 @@ server {
     ssl_certificate_key $CERT_DIR/key.pem;
     
     location / {
-        proxy_pass http://127.0.0.1:4000;
+        proxy_pass http://127.0.0.1:$LITELLM_SERVER_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
