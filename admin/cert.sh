@@ -57,24 +57,26 @@ NGINX_CONF="/etc/nginx/sites-available/$YOUR_SUBDOMAIN"
 
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
+    if (\$host = $YOUR_SUBDOMAIN) {
+        return 301 https://\$host\$request_uri;
+    }
     listen 80;
     server_name $YOUR_SUBDOMAIN;
-    return 301 https://\$host\$request_uri;
+    return 404;
 }
 
 server {
+
+    root /var/www/html;
+
     listen 443 ssl http2;
     server_name $YOUR_SUBDOMAIN;
 
     ssl_certificate $CERT_DIR/fullchain.pem;
     ssl_certificate_key $CERT_DIR/key.pem;
     
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-    
     location / {
-        proxy_pass http://localhost:4000;
+        proxy_pass http://127.0.0.1:4000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
