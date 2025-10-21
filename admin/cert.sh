@@ -41,9 +41,9 @@ if [[ "$DEPLOY_CERT" == "y" || "$DEPLOY_CERT" == "Y" ]]; then
 
 fi
 
-CERT_DIR="/etc/nginx/ssl/$YOUR_DOMAIN"
+CERT_DIR="/etc/nginx/ssl"
 sudo mkdir -p "$CERT_DIR"
-
+echo ""
 echo "Installing cert on nginx..."
 $ACME_SH --install-cert -d $YOUR_DOMAIN \
 --key-file       $CERT_DIR/key.pem \
@@ -53,18 +53,18 @@ $ACME_SH --install-cert -d $YOUR_DOMAIN \
 # Create Nginx SSL configuration
 echo ""
 echo "Creating Nginx SSL configuration..."
-NGINX_CONF="/etc/nginx/sites-available/$YOUR_DOMAIN"
+NGINX_CONF="/etc/nginx/sites-available/$YOUR_SUBDOMAIN"
 
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
     listen 80;
-    server_name $YOUR_DOMAIN${YOUR_SUBDOMAIN:+ $YOUR_SUBDOMAIN};
-    return 301 https://\$server_name\$request_uri;
+    server_name $YOUR_SUBDOMAIN;
+    return 301 https://\$host\$request_uri;
 }
 
 server {
     listen 443 ssl http2;
-    server_name $YOUR_DOMAIN${YOUR_SUBDOMAIN:+ $YOUR_SUBDOMAIN};
+    server_name $YOUR_SUBDOMAIN;
 
     ssl_certificate $CERT_DIR/fullchain.pem;
     ssl_certificate_key $CERT_DIR/key.pem;
@@ -74,11 +74,19 @@ server {
     ssl_prefer_server_ciphers on;
     
     location / {
-        proxy_pass http://localhost:4000;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
+        root /var/www/html;
+        index index.html;
     }
 }
 EOF
+
+# Enable the configuration
+sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+
+# Test and reload Nginx
+echo ""
+echo "Testing Nginx configuration..."
+sudo nginx -t
+echo ""
+echo "Reloading Nginx..."
+sudo systemctl reload nginx
