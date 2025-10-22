@@ -4,6 +4,16 @@ set -e
 sudo apt update
 sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc nginx build-essential
 
+if [ -d ".venv" ]; then
+    echo ".venv already exists, skipping creation."
+else
+    echo "Creating Python virtual environment..."
+    python3 -m venv .venv
+fi
+
+source .venv/bin/activate
+pip install -r requirements.txt
+
 read -p "[ADMIN_EMAIL] Your email address: " ADMIN_EMAIL
 export ADMIN_EMAIL
 read -p "[APP_DOMAIN] Domain (e.g. example.com): " APP_DOMAIN
@@ -40,7 +50,7 @@ if [[ "$DEPLOY_CERT" == "y" || "$DEPLOY_CERT" == "Y" ]]; then
 
     # add A record for APP_SUBDOMAIN_NAME to point to YOUR_SERVER_IP
     export PUBLIC_SERVER_IP=$(curl -s -4 ifconfig.me)
-    python3 a_record.py
+    python3 admin/a_record.py
 
     echo "Issuing cert..."
     $ACME_SH --issue --dns dns_cf -d $APP_DOMAIN -d $APP_SUBDOMAIN_NAME
