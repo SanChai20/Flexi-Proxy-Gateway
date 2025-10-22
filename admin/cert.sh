@@ -6,10 +6,10 @@ sudo apt install python3 python3-dev python3-venv libaugeas-dev gcc nginx build-
 
 read -p "[ADMIN_EMAIL] Your email address: " ADMIN_EMAIL
 export ADMIN_EMAIL
-read -p "[YOUR_DOMAIN] Domain (e.g. example.com): " YOUR_DOMAIN
-export YOUR_DOMAIN
-read -p "[YOUR_SUBDOMAIN] Subdomain (e.g. api.example.com): " YOUR_SUBDOMAIN
-export YOUR_SUBDOMAIN
+read -p "[APP_DOMAIN] Domain (e.g. example.com): " APP_DOMAIN
+export APP_DOMAIN
+read -p "[APP_SUBDOMAIN_NAME] Subdomain (e.g. api.example.com): " APP_SUBDOMAIN_NAME
+export APP_SUBDOMAIN_NAME
 
 export LITELLM_SERVER_PORT=4000
 
@@ -38,32 +38,20 @@ if [[ "$DEPLOY_CERT" == "y" || "$DEPLOY_CERT" == "Y" ]]; then
     read -p "[CF_Zone_ID] Cloudflare zone id (https://dash.cloudflare.com/): " CF_Zone_ID
     export CF_Zone_ID
 
-    # add A record for YOUR_SUBDOMAIN to point to YOUR_SERVER_IP
-    YOUR_SERVER_IP=$(curl -s -4 ifconfig.me)
-
-    TXTRECORD_ID=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_Zone_ID/dns_records" \
-     -H     "Authorization: Bearer $CF_Token" \
-     -H     "Content-Type: application/json" \
-     --data '{"type":"TXT","name":"'"$CREATE_DOMAIN"'","value":"'"$CERTBOT_VALIDATION"'","ttl":120,"comment":"'"temp"'"}' \
-             | python -c "import sys,json;print(json.load(sys.stdin)['uid'])")
-
-
-
-
-
-
-
+    # add A record for APP_SUBDOMAIN_NAME to point to YOUR_SERVER_IP
+    export PUBLIC_SERVER_IP=$(curl -s -4 ifconfig.me)
+    python3 a_record.py
 
     echo "Issuing cert..."
-    $ACME_SH --issue --dns dns_cf -d $YOUR_DOMAIN -d $YOUR_SUBDOMAIN
+    $ACME_SH --issue --dns dns_cf -d $APP_DOMAIN -d $APP_SUBDOMAIN_NAME
 
 fi
 
-CERT_DIR="/etc/nginx/ssl/$YOUR_SUBDOMAIN"
+CERT_DIR="/etc/nginx/ssl/$APP_SUBDOMAIN_NAME"
 sudo mkdir -p "$CERT_DIR"
 echo ""
 echo "Installing cert on nginx..."
-$ACME_SH --install-cert -d $YOUR_DOMAIN \
+$ACME_SH --install-cert -d $APP_DOMAIN \
 --key-file       $CERT_DIR/key.pem \
 --fullchain-file $CERT_DIR/fullchain.pem \
 --reloadcmd "service nginx force-reload"
@@ -71,15 +59,15 @@ $ACME_SH --install-cert -d $YOUR_DOMAIN \
 # Create Nginx SSL configuration
 echo ""
 echo "Creating Nginx SSL configuration..."
-NGINX_CONF="/etc/nginx/sites-available/$YOUR_SUBDOMAIN"
+NGINX_CONF="/etc/nginx/sites-available/$APP_SUBDOMAIN_NAME"
 
 sudo tee "$NGINX_CONF" > /dev/null <<EOF
 server {
-    if (\$host = $YOUR_SUBDOMAIN) {
+    if (\$host = $APP_SUBDOMAIN_NAME) {
         return 301 https://\$host\$request_uri;
     }
     listen 80;
-    server_name $YOUR_SUBDOMAIN;
+    server_name $APP_SUBDOMAIN_NAME;
     return 404;
 }
 
@@ -88,7 +76,7 @@ server {
     root /var/www/html;
 
     listen 443 ssl http2;
-    server_name $YOUR_SUBDOMAIN;
+    server_name $APP_SUBDOMAIN_NAME;
 
     ssl_certificate $CERT_DIR/fullchain.pem;
     ssl_certificate_key $CERT_DIR/key.pem;

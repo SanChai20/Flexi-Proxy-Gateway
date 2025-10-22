@@ -5,19 +5,19 @@ import psutil
 from cloudflare import Cloudflare
 from cloudflare.types.dns.record_response import ARecord
 
-CLOUDFLARE_ACCESS_TOKEN = os.getenv("CLOUDFLARE_ACCESS_TOKEN", None)
-CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID", None)
+CF_Token = os.getenv("CF_Token", None)
+CF_Zone_ID = os.getenv("CF_Zone_ID", None)
 APP_SUBDOMAIN_NAME = os.getenv("APP_SUBDOMAIN_NAME", None)
 PUBLIC_SERVER_IP = os.getenv("PUBLIC_SERVER_IP", None)
 
 
 def update_a_record():
 
-    if CLOUDFLARE_ACCESS_TOKEN is None:
-        print("Make sure CLOUDFLARE_ACCESS_TOKEN is set.")
+    if CF_Token is None:
+        print("Make sure CF_Token is set.")
         return
-    if CLOUDFLARE_ZONE_ID is None:
-        print("Make sure CLOUDFLARE_ZONE_ID is set.")
+    if CF_Zone_ID is None:
+        print("Make sure CF_Zone_ID is set.")
         return
     if APP_SUBDOMAIN_NAME is None:
         print("Make sure APP_SUBDOMAIN_NAME is set.")
@@ -26,10 +26,10 @@ def update_a_record():
         print("Public ip is none.")
         return
 
-    client = Cloudflare(api_token=CLOUDFLARE_ACCESS_TOKEN)
+    client = Cloudflare(api_token=CF_Token)
     all_a_records = [ARecord]
     for record in client.dns.records.list(
-        zone_id=CLOUDFLARE_ZONE_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
+        zone_id=CF_Zone_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
     ):
         if isinstance(record, ARecord):
             all_a_records.append(record)  # type: ignore
@@ -41,7 +41,7 @@ def update_a_record():
         # Update
         record_response = client.dns.records.edit(
             dns_record_id=all_a_records[0].id,
-            zone_id=CLOUDFLARE_ZONE_ID,
+            zone_id=CF_Zone_ID,
             name=APP_SUBDOMAIN_NAME,
             type="A",
             content=PUBLIC_SERVER_IP,
@@ -50,7 +50,7 @@ def update_a_record():
     else:
         # Create
         record_response = client.dns.records.create(
-            zone_id=CLOUDFLARE_ZONE_ID,
+            zone_id=CF_Zone_ID,
             name=APP_SUBDOMAIN_NAME,
             ttl=1,
             type="A",
