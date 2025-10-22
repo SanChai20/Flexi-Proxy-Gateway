@@ -27,7 +27,7 @@ def update_a_record():
         return
 
     client = Cloudflare(api_token=CF_Token)
-    all_a_records = [ARecord]
+    all_a_records = []
     for record in client.dns.records.list(
         zone_id=CF_Zone_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
     ):
@@ -40,7 +40,7 @@ def update_a_record():
     if len(all_a_records) > 0:
         # Update
         record_response = client.dns.records.edit(
-            dns_record_id=all_a_records[0].id,
+            dns_record_id=all_a_records[0].id,  # type: ignore
             zone_id=CF_Zone_ID,
             name=APP_SUBDOMAIN_NAME,
             type="A",
