@@ -130,6 +130,8 @@ read -p "Do you want to launch Litellm Proxy Server? (y/n): " LAUNCH_SERVER
 
 if [[ "$LAUNCH_SERVER" == "y" || "$LAUNCH_SERVER" == "Y" ]]; then
 
+# kill old
+sudo pkill -f litellm
 
 echo "Generating key pair..."
 read -p "[FP_PROXY_SERVER_KEYPAIR_PWD] Customized key pair password: " FP_PROXY_SERVER_KEYPAIR_PWD
