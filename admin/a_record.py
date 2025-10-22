@@ -1,7 +1,5 @@
 import os
-import socket
 
-import psutil
 from cloudflare import Cloudflare
 from cloudflare.types.dns.record_response import ARecord
 
