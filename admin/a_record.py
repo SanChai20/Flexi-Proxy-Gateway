@@ -3,29 +3,50 @@ import socket
 
 import psutil
 from cloudflare import Cloudflare
+from cloudflare.types.dns.record_response import ARecord
 
 CLOUDFLARE_ACCESS_TOKEN = os.getenv("CLOUDFLARE_ACCESS_TOKEN", None)
-CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID", "")
-APP_SUBDOMAIN_NAME = os.getenv("APP_SUBDOMAIN_NAME", "")
+CLOUDFLARE_ZONE_ID = os.getenv("CLOUDFLARE_ZONE_ID", None)
+APP_SUBDOMAIN_NAME = os.getenv("APP_SUBDOMAIN_NAME", None)
 PUBLIC_SERVER_IP = os.getenv("PUBLIC_SERVER_IP", None)
 
 
 def update_a_record():
 
+    if CLOUDFLARE_ACCESS_TOKEN is None:
+        print("Make sure CLOUDFLARE_ACCESS_TOKEN is set.")
+        return
+    if CLOUDFLARE_ZONE_ID is None:
+        print("Make sure CLOUDFLARE_ZONE_ID is set.")
+        return
+    if APP_SUBDOMAIN_NAME is None:
+        print("Make sure APP_SUBDOMAIN_NAME is set.")
+        return
+    if PUBLIC_SERVER_IP is None:
+        print("Public ip is none.")
+        return
+
     client = Cloudflare(api_token=CLOUDFLARE_ACCESS_TOKEN)
-    all_a_records = []
+    all_a_records = [ARecord]
     for record in client.dns.records.list(
-        zone_id=CLOUDFLARE_ZONE_ID, type="A", name={"contains": APP_SUBDOMAIN_NAME}
+        zone_id=CLOUDFLARE_ZONE_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
     ):
-        all_a_records.append(record)  # type: ignore
-        print(
-            f"Name: {record.name}, Content: {record.content}, Proxied: {record.proxied}"
-        )
+        if isinstance(record, ARecord):
+            all_a_records.append(record)  # type: ignore
+            print(
+                f"Name: {record.name}, Content: {record.content}, Proxied: {record.proxied}"
+            )
 
     if len(all_a_records) > 0:
         # Update
-
-        pass
+        record_response = client.dns.records.edit(
+            dns_record_id=all_a_records[0].id,
+            zone_id=CLOUDFLARE_ZONE_ID,
+            name=APP_SUBDOMAIN_NAME,
+            type="A",
+            content=PUBLIC_SERVER_IP,
+        )
+        print(record_response)
     else:
         # Create
         record_response = client.dns.records.create(
@@ -36,10 +57,6 @@ def update_a_record():
             content=PUBLIC_SERVER_IP,
         )
         print(record_response)
-
-    print(f"\n总共找到 {len(all_a_records)} 条 A 记录")
-
-    return
 
 
 if __name__ == "__main__":
