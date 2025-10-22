@@ -51,19 +51,26 @@ get_domain_params() {
 
 # Function to install acme.sh
 install_acme() {
-    if [ -d "acme.sh" ] && [ -f "acme.sh/acme.sh" ]; then
+    if [ -d "$HOME/.acme.sh" ] && [ -f "$HOME/.acme.sh/acme.sh" ]; then
         echo "acme.sh is already installed, skipping installation..."
-        ACME_SH="acme.sh/acme.sh"
+        export ACME_SH="$HOME/.acme.sh/acme.sh"
     else
         echo "Installing acme.sh..."
+        
+        # Install socat to avoid warnings
+        sudo apt install socat -y
+        
         if [ -d "acme.sh" ]; then
             echo "Removing incomplete acme.sh directory..."
             rm -rf acme.sh
         fi
         
         git clone https://github.com/acmesh-official/acme.sh.git
-        ACME_SH="acme.sh/acme.sh"
-        $ACME_SH --install -m "$ADMIN_EMAIL"
+        cd acme.sh
+        ./acme.sh --install -m "$ADMIN_EMAIL"
+        cd ..
+        
+        export ACME_SH="$HOME/.acme.sh/acme.sh"
     fi
 }
 
