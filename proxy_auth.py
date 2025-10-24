@@ -679,6 +679,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         headers = {
             "authorization": f"Bearer {app_token}",
             "X-API-Key": api_key,
+            "X-Proxy-Id": Config.FP_PROXY_SERVER_ID,
         }
 
         # Initial validation
