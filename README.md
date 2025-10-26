@@ -5,8 +5,8 @@ Run this for complete initial setup including dependencies, SSL certificate, and
 
 ```bash
 sudo su root
-chmod u+x admin/setup.sh
-admin/setup.sh
+chmod u+x admin/manual.sh
+admin/manual.sh
 # Select option 1
 ```
 
@@ -15,7 +15,7 @@ Run this to install and configure SSL certificate only.
 
 ```bash
 sudo su root
-admin/setup.sh
+admin/manual.sh
 # Select option 2
 ```
 
@@ -24,7 +24,7 @@ Run this to start or restart the server (requires previous setup).
 
 ```bash
 sudo su root
-admin/setup.sh
+admin/manual.sh
 # Select option 3
 ```
 
