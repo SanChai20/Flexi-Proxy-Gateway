@@ -543,6 +543,9 @@ class TokenRotator:
         if self._background_thread and self._background_thread.is_alive():
             return
 
+        LoggerManager.info("Performing initial token rotation")
+        self._refresh_token_with_retry()
+
         self._stop_flag.clear()
         self._background_thread = threading.Thread(
             target=self._background_refresh_loop,
