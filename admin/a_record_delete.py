@@ -5,7 +5,7 @@ from cloudflare.types.dns.record_response import ARecord
 
 CF_Token = os.getenv("CF_Token", None)
 CF_Zone_ID = os.getenv("CF_Zone_ID", None)
-SUBDOMAIN_NAME = os.getenv("SUBDOMAIN_NAME", None)
+APP_SUBDOMAIN_NAME = os.getenv("APP_SUBDOMAIN_NAME", None)
 
 
 def delete_a_record():
@@ -16,14 +16,14 @@ def delete_a_record():
     if CF_Zone_ID is None:
         print("Make sure CF_Zone_ID is set.")
         return
-    if SUBDOMAIN_NAME is None:
-        print("Make sure SUBDOMAIN_NAME is set.")
+    if APP_SUBDOMAIN_NAME is None:
+        print("Make sure APP_SUBDOMAIN_NAME is set.")
         return
 
     client = Cloudflare(api_token=CF_Token)
     all_a_records = []
     for record in client.dns.records.list(
-        zone_id=CF_Zone_ID, type="A", name={"exact": SUBDOMAIN_NAME}
+        zone_id=CF_Zone_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
     ):
         if isinstance(record, ARecord):
             all_a_records.append(record)  # type: ignore
