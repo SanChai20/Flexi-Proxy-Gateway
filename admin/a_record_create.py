@@ -1,7 +1,6 @@
 import os
 
 from cloudflare import Cloudflare
-from cloudflare.types.dns.record_response import ARecord
 
 CF_Token = os.getenv("CF_Token", None)
 CF_Zone_ID = os.getenv("CF_Zone_ID", None)
@@ -25,36 +24,15 @@ def update_a_record():
         return
 
     client = Cloudflare(api_token=CF_Token)
-    all_a_records = []
-    for record in client.dns.records.list(
-        zone_id=CF_Zone_ID, type="A", name={"exact": APP_SUBDOMAIN_NAME}
-    ):
-        if isinstance(record, ARecord):
-            all_a_records.append(record)  # type: ignore
-            print(
-                f"Name: {record.name}, Content: {record.content}, Proxied: {record.proxied}"
-            )
-
-    if len(all_a_records) > 0:
-        # Update
-        record_response = client.dns.records.edit(
-            dns_record_id=all_a_records[0].id,  # type: ignore
-            zone_id=CF_Zone_ID,
-            name=APP_SUBDOMAIN_NAME,
-            type="A",
-            content=PUBLIC_SERVER_IP,
-        )
-        print(record_response)
-    else:
-        # Create
-        record_response = client.dns.records.create(
-            zone_id=CF_Zone_ID,
-            name=APP_SUBDOMAIN_NAME,
-            ttl=1,
-            type="A",
-            content=PUBLIC_SERVER_IP,
-        )
-        print(record_response)
+    # Create
+    record_response = client.dns.records.create(
+        zone_id=CF_Zone_ID,
+        name=APP_SUBDOMAIN_NAME,
+        ttl=1,
+        type="A",
+        content=PUBLIC_SERVER_IP,
+    )
+    print(record_response)
 
 
 if __name__ == "__main__":
