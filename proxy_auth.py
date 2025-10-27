@@ -35,7 +35,7 @@ class Config:
     # Proxy Server
     FP_PROXY_SERVER_URL: Optional[str] = os.getenv("FP_PROXY_SERVER_URL")
     FP_PROXY_SERVER_ID: Optional[str] = os.getenv("FP_PROXY_SERVER_ID")
-    FP_PROXY_SERVER_ADVANCED: int = int(os.getenv("FP_PROXY_SERVER_ADVANCED", "0"))
+
     FP_PROXY_SERVER_KEYPAIR_PWD: Optional[str] = os.getenv(
         "FP_PROXY_SERVER_KEYPAIR_PWD"
     )
@@ -480,7 +480,6 @@ class TokenRotator:
                 json={
                     "url": Config.FP_PROXY_SERVER_URL,
                     "status": ProxyRequestCounter.status(),
-                    "adv": Config.FP_PROXY_SERVER_ADVANCED == 1,
                     "id": Config.FP_PROXY_SERVER_ID,
                 },
             )
