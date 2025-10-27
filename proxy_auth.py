@@ -115,6 +115,7 @@ class LoggerManager:
         when: str = "midnight",
         interval: int = 1,
         backup_count: int = 7,
+        console: bool = True,  # Add parameter to enable/disable console logging
     ) -> None:
         if cls._logger is not None:
             return
@@ -138,7 +139,7 @@ class LoggerManager:
             log_path = Path(log_dir)
             log_path.mkdir(parents=True, exist_ok=True)
 
-            # Single file handler
+            # File handler
             file_path = log_path / log_file
             file_handler = TimedRotatingFileHandler(
                 file_path,
@@ -150,6 +151,13 @@ class LoggerManager:
             file_handler.setFormatter(formatter)
             file_handler.setLevel(numeric_level)
             root_logger.addHandler(file_handler)
+
+            # Console handler
+            if console:
+                console_handler = logging.StreamHandler()
+                console_handler.setFormatter(formatter)
+                console_handler.setLevel(numeric_level)
+                root_logger.addHandler(console_handler)
 
             cls._logger = logging.getLogger(__name__)
             cls._logger.info("Logger initialized")
