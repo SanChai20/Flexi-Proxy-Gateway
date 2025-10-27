@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, ContextManager, Dict, Iterator, Literal, Optional, Tuple
 
 import requests
-from cachetools import LRUCache
+from cachetools import TTLCache
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -41,36 +41,38 @@ class Config:
     FP_PROXY_SERVER_KEYPAIR_DIR: str = os.getenv("FP_PROXY_SERVER_KEYPAIR_DIR", "..")
     FP_PROXY_SERVER_FERNET_KEY: str = os.getenv("FP_PROXY_SERVER_FERNET_KEY", "")
 
-    # LRU Cache
-    FP_LRU_MAX_CACHE_SIZE: int = int(os.getenv("FP_LRU_MAX_CACHE_SIZE", "1000"))
+    # LRU Cache - 私有服务器优化：小规模缓存
+    FP_LRU_MAX_CACHE_SIZE: int = int(os.getenv("FP_LRU_MAX_CACHE_SIZE", "50"))
+    FP_CACHE_TTL: int = int(os.getenv("FP_CACHE_TTL", "7200"))  # 2小时
 
-    # HTTP - Production-optimized defaults
+    # HTTP - 私有服务器优化：降低连接池
     FP_HTTP_MAX_POOL_CONNECTIONS_COUNT: int = int(
-        os.getenv("FP_HTTP_MAX_POOL_CONNECTIONS_COUNT", "50")
+        os.getenv("FP_HTTP_MAX_POOL_CONNECTIONS_COUNT", "5")
     )
     FP_HTTP_CONNECT_TIMEOUT_LIMIT: int = int(
-        os.getenv("FP_HTTP_CONNECT_TIMEOUT_LIMIT", "3")
+        os.getenv("FP_HTTP_CONNECT_TIMEOUT_LIMIT", "5")
     )
     FP_HTTP_READ_TIMEOUT_LIMIT: int = int(
         os.getenv("FP_HTTP_READ_TIMEOUT_LIMIT", "120")
     )
     FP_HTTP_MAX_RETRY_COUNT: int = int(os.getenv("FP_HTTP_MAX_RETRY_COUNT", "2"))
-    FP_HTTP_RETRY_BACKOFF: float = float(os.getenv("FP_HTTP_RETRY_BACKOFF", "0.2"))
-    FP_HTTP_POOL_MAX_SIZE: int = int(os.getenv("FP_HTTP_POOL_MAX_SIZE", "100"))
+    FP_HTTP_RETRY_BACKOFF: float = float(os.getenv("FP_HTTP_RETRY_BACKOFF", "0.3"))
+    FP_HTTP_POOL_MAX_SIZE: int = int(os.getenv("FP_HTTP_POOL_MAX_SIZE", "10"))
 
-    # Token Rotation
-    FP_TOKEN_REFRESH_INTERVAL: int = int(os.getenv("FP_TOKEN_REFRESH_INTERVAL", "300"))
-    FP_TOKEN_REFRESH_BUFFER: int = int(os.getenv("FP_TOKEN_REFRESH_BUFFER", "1500"))
+    # Token Rotation - 私有服务器优化：延长间隔
+    FP_TOKEN_REFRESH_INTERVAL: int = int(os.getenv("FP_TOKEN_REFRESH_INTERVAL", "600"))
+    FP_TOKEN_REFRESH_BUFFER: int = int(os.getenv("FP_TOKEN_REFRESH_BUFFER", "1800"))
 
     # Logging
-    FP_LOG_LEVEL: str = os.getenv("FP_LOG_LEVEL", "WARNING")
-    FP_LOG_DIR: str = os.getenv("FP_LOG_DIR", "/var/log/litellm")
+    FP_LOG_LEVEL: str = os.getenv("FP_LOG_LEVEL", "INFO")
+    FP_LOG_DIR: str = os.getenv("FP_LOG_DIR", "./logs")
     FP_LOG_FILE: str = os.getenv("FP_LOG_FILE", "proxy_auth.log")
     FP_LOG_BACKUP_COUNT: int = int(os.getenv("FP_LOG_BACKUP_COUNT", "7"))
 
-    FP_DIAG: int = int(os.getenv("FP_DIAG", "1"))
-    FP_DIAG_SLOW_MS: int = int(os.getenv("FP_DIAG_SLOW_MS", "20"))
-    FP_DIAG_SAMPLE_RATE: float = float(os.getenv("FP_DIAG_SAMPLE_RATE", "1.0"))
+    # Diagnostics - 私有服务器优化：默认禁用
+    FP_DIAG: int = int(os.getenv("FP_DIAG", "0"))
+    FP_DIAG_SLOW_MS: int = int(os.getenv("FP_DIAG_SLOW_MS", "50"))
+    FP_DIAG_SAMPLE_RATE: float = float(os.getenv("FP_DIAG_SAMPLE_RATE", "0.1"))
 
     @classmethod
     def validate(cls) -> None:
@@ -111,11 +113,11 @@ class LoggerManager:
         cls,
         log_file: str = "proxy_auth.log",
         log_dir: str = "./logs",
-        level: str = "WARNING",
+        level: str = "INFO",
         when: str = "midnight",
         interval: int = 1,
         backup_count: int = 7,
-        console: bool = True,  # Add parameter to enable/disable console logging
+        console: bool = True,
     ) -> None:
         if cls._logger is not None:
             return
@@ -124,7 +126,7 @@ class LoggerManager:
             if cls._logger is not None:
                 return
 
-            numeric_level = getattr(logging, level.upper(), logging.WARNING)
+            numeric_level = getattr(logging, level.upper(), logging.INFO)
 
             root_logger = logging.getLogger()
             root_logger.handlers.clear()
@@ -191,12 +193,13 @@ class LoggerManager:
 
 
 class Diag:
+    """Diagnostic utilities - optional for private servers."""
+
     _enabled = False
     _slow_ms = 100
     _sample_rate = 1.0
     _req_id_counter = count(1)
 
-    # 保存原始函数，便于恢复
     _orig_getaddrinfo = None
     _orig_create_connection = None
     _orig_do_handshake = None
@@ -289,7 +292,7 @@ class Diag:
 
 
 class ProxyRequestCounter:
-    """Thread-safe request counter."""
+    """Thread-safe request counter - simplified for private servers."""
 
     __slots__ = ()
     _value: int = 0
@@ -306,52 +309,21 @@ class ProxyRequestCounter:
 
     @classmethod
     def status(cls) -> Literal["unavailable", "spare", "busy", "full"]:
+        """Simplified status for private servers (1-5 users)."""
         with cls._lock:
             current = cls._value
             cls._value = 0
 
-            if current < 100:
+            if current < 10:
                 return "spare"
-            elif current < 500:
+            elif current < 50:
                 return "busy"
             else:
                 return "full"
 
 
-class TimestampedLRUCache(LRUCache):
-    """LRU Cache with timestamp tracking - simplified version."""
-
-    __slots__ = ("_last_used",)
-
-    def __init__(self, maxsize: int, getsizeof=None):
-        super().__init__(maxsize, getsizeof)  # type: ignore
-        self._last_used: Dict[str, float] = {}
-
-    def __getitem__(self, key: str) -> Any:
-        try:
-            value = super().__getitem__(key)  # type: ignore
-            self._last_used[key] = time.time()
-            return value
-        except KeyError:
-            return None
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        super().__setitem__(key, value)  # type: ignore
-        self._last_used[key] = time.time()
-
-    def popitem(self) -> Tuple[str, Any]:
-        if not self._last_used:
-            return super().popitem()
-
-        lru_key = min(self._last_used, key=lambda k: self._last_used[k])
-        lru_value = super().__getitem__(lru_key)  # type: ignore
-        del self._last_used[lru_key]
-        super().__delitem__(lru_key)  # type: ignore
-        return lru_key, lru_value
-
-
 class HTTPClient:
-    """Optimized HTTP client with connection pooling."""
+    """Optimized HTTP client for private servers."""
 
     __slots__ = ("timeout", "session")
 
@@ -383,8 +355,8 @@ class HTTPClient:
         session.headers.update(
             {
                 "Connection": "keep-alive",
-                "Keep-Alive": "timeout=300, max=1000",
-                "User-Agent": f"LiteLLM-Proxy/{Config.FP_PROXY_SERVER_ID}",
+                "Keep-Alive": "timeout=300, max=100",
+                "User-Agent": f"LiteLLM-Proxy-Private/{Config.FP_PROXY_SERVER_ID}",
             }
         )
 
@@ -429,12 +401,14 @@ class HybridCrypto:
 
     @classmethod
     def symmetric_encrypt(cls, data: bytes | str) -> bytes:
+        """Symmetric encryption using Fernet. See: [cryptography.io](https://cryptography.io/en/41.0.5/fernet/)"""
         if isinstance(data, str):
             data = data.encode("utf-8")
         return cls._get_fernet().encrypt(data)
 
     @classmethod
     def symmetric_decrypt(cls, token: bytes | str) -> bytes:
+        """Symmetric decryption using Fernet. See: [cryptography.io](https://cryptography.io/en/41.0.5/fernet/)"""
         if isinstance(token, str):
             token = token.encode("utf-8")
         return cls._get_fernet().decrypt(token)
@@ -509,14 +483,14 @@ class HybridCrypto:
 
 
 class TokenRotator:
-    """Optimized token rotation with background refresh."""
+    """Token rotation with background refresh - optimized for private servers."""
 
     def __init__(
         self,
         base_url: str,
         initial_token: str,
-        refresh_buffer: int = 300,
-        check_interval: int = 60,
+        refresh_buffer: int = 1800,
+        check_interval: int = 600,
     ):
         """
         :param base_url: API base URL
@@ -632,7 +606,6 @@ class TokenRotator:
     def _refresh_token(self) -> bool:
         """Perform actual token rotation. Thread-safe."""
         with self._lock:
-            # Get current token for exchange
             current_token = self._token if self._token else self._initial_token
 
             if not current_token:
@@ -640,7 +613,6 @@ class TokenRotator:
                 return False
 
         try:
-            # Perform rotation request (outside lock to avoid blocking)
             response = http_client.post(
                 url=f"{self._base_url}/api/auth/exchange",
                 headers={"authorization": f"Bearer {current_token}"},
@@ -668,7 +640,6 @@ class TokenRotator:
                 self._consecutive_failures += 1
                 return False
 
-            # Update token cache
             with self._lock:
                 self._token = new_token
                 self._expires_at = time.time() + expires_in - self._refresh_buffer
@@ -679,7 +650,6 @@ class TokenRotator:
                 f"next refresh at {datetime.fromtimestamp(self._expires_at).strftime('%Y-%m-%d %H:%M:%S')})"
             )
 
-            # Check for consecutive failures
             if self._consecutive_failures >= self._max_failures:
                 LoggerManager.error(
                     f"Token refresh failed {self._consecutive_failures} times consecutively"
@@ -744,8 +714,10 @@ class EncryptedTokenRotator(TokenRotator):
 
 
 def convert_sets_to_lists(obj: Any) -> Any:
-    """Recursively convert sets to lists for JSON serialization."""
+    """Recursively convert sets to lists for JSON serialization.
 
+    See Pydantic serialization docs: [docs.pydantic.dev](https://docs.pydantic.dev/latest/concepts/serialization/)
+    """
     if isinstance(obj, set):
         return list(obj)
     elif isinstance(obj, dict):
@@ -774,8 +746,10 @@ LoggerManager.init(
     backup_count=Config.FP_LOG_BACKUP_COUNT,
 )
 
-LoggerManager.info("=== Proxy Auth Module Initializing ===")
+LoggerManager.info("=== Private Proxy Auth Module Initializing ===")
 LoggerManager.info(f"Proxy ID: {Config.FP_PROXY_SERVER_ID}")
+LoggerManager.info(f"Cache size: {Config.FP_LRU_MAX_CACHE_SIZE}")
+LoggerManager.info(f"Cache TTL: {Config.FP_CACHE_TTL}s")
 
 # Enable diagnostics if requested
 if Config.FP_DIAG == 1:
@@ -783,7 +757,6 @@ if Config.FP_DIAG == 1:
     LoggerManager.warn(
         f"Diagnostics enabled: slow_ms={Config.FP_DIAG_SLOW_MS}, sample_rate={Config.FP_DIAG_SAMPLE_RATE}"
     )
-
 
 # Initialize HTTP client
 http_client = HTTPClient()
@@ -835,57 +808,56 @@ signal.signal(signal.SIGTERM, graceful_shutdown)
 signal.signal(signal.SIGINT, graceful_shutdown)
 
 
-# Cache for API key validation
-_key_cache: TimestampedLRUCache = TimestampedLRUCache(
-    maxsize=Config.FP_LRU_MAX_CACHE_SIZE
+# Cache for API key validation - 使用TTLCache替代TimestampedLRUCache
+_key_cache: TTLCache = TTLCache(
+    maxsize=Config.FP_LRU_MAX_CACHE_SIZE, ttl=Config.FP_CACHE_TTL
 )
 
 
 # ============================================================================
 # LiteLLM Auth Hook
 # ============================================================================
-_CACHE_TTL = 7200  # 2 hours
 
 
 class CacheEntry:
-    __slots__ = ("enc", "mid", "llm", "expires_at")
+    """Simplified cache entry for private servers."""
 
-    def __init__(self, enc: bytes, mid: str, llm: str, ttl: int = 3600):
+    __slots__ = ("enc", "mid", "llm")
+
+    def __init__(self, enc: bytes, mid: str, llm: str):
         self.enc = enc
         self.mid = mid
         self.llm = llm
-        self.expires_at = time.time() + ttl
-
-    def is_valid(self) -> bool:
-        return time.time() < self.expires_at
 
 
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
     """
-    Custom authentication hook for LiteLLM - Optimized version.
+    Custom authentication hook for LiteLLM - Private server optimized.
     """
-
     if not api_key:
         raise ValueError("API key is required")
+
     req_id = Diag.new_req_id() if Config.FP_DIAG == 1 else 0
-    # cache lookup
+
     # Hash API key for cache lookup
     hashed_token = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-    # Check cache first
-    cache_entry: CacheEntry | None = _key_cache[hashed_token]
-    if cache_entry and cache_entry.is_valid():
+
+    # Check cache first (TTLCache自动处理过期)
+    cache_entry: CacheEntry | None = _key_cache.get(hashed_token)  # type: ignore
+    if cache_entry:
         ProxyRequestCounter.increment()
         return UserAPIKeyAuth(
             metadata={
-                "fp_key": HybridCrypto.symmetric_decrypt(cache_entry.enc).decode(
+                "fp_key": HybridCrypto.symmetric_decrypt(cache_entry["enc"]).decode(
                     "utf-8"
                 ),
-                "fp_mid": cache_entry.mid,
-                "fp_llm": cache_entry.llm,
+                "fp_mid": cache_entry["mid"],
+                "fp_llm": cache_entry["llm"],
             },
             api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
         )
+
     # Get current app token
     app_token = token_rotator.get_token()
     if not app_token:
@@ -917,14 +889,14 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         if not message_decrypted:
             raise ValueError("Failed to decrypt API key")
 
-        # Cache the result
+        # Cache the result (TTLCache自动管理过期)
         entry = CacheEntry(
             enc=HybridCrypto.symmetric_encrypt(message_decrypted),
             mid=response_data["mid"],
             llm=response_data["llm"],
-            ttl=_CACHE_TTL,
         )
         _key_cache[hashed_token] = entry
+
         ProxyRequestCounter.increment()
         return UserAPIKeyAuth(
             metadata={
