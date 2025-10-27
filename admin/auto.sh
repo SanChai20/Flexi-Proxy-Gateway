@@ -131,7 +131,7 @@ export PUBLIC_SERVER_IP=$(curl -s -4 ifconfig.me)
 echo "Server IP: $PUBLIC_SERVER_IP"
 echo "Domain: $APP_SUBDOMAIN_NAME"
 
-python3 admin/a_record.py
+python3 admin/a_record_create.py
 
 echo ""
 echo "✓ DNS configured successfully"
@@ -324,7 +324,6 @@ if pgrep -f "litellm.*$LITELLM_SERVER_PORT" > /dev/null; then
     SERVER_PID=$(pgrep -f "litellm.*$LITELLM_SERVER_PORT")
     echo ""
     echo "✓ Server launched successfully!"
-    echo "  PID: $SERVER_PID"
     echo "  Log: litellm.log"
 else
     echo ""
@@ -343,7 +342,6 @@ echo "Server Details:"
 echo "  • URL: $FP_PROXY_SERVER_URL"
 echo "  • ID: $FP_PROXY_SERVER_ID"
 echo "  • Port: $LITELLM_SERVER_PORT"
-echo "  • PID: $SERVER_PID"
 echo ""
 echo "SSL Certificate:"
 echo "  • Auto-renewal: Enabled (60 days before expiry)"
@@ -354,8 +352,6 @@ echo "  • Application: ./litellm.log"
 echo "  • Nginx: /var/log/nginx/"
 echo ""
 echo "Next Steps:"
-echo "  • Verify server: curl https://$APP_SUBDOMAIN_NAME/health"
-echo "  • Monitor logs: tail -f litellm.log"
-echo "  • Check status: systemctl status nginx"
+echo "  • Verify server: curl https://$APP_SUBDOMAIN_NAME/health/liveness"
 echo ""
 echo "========================================="
