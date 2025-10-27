@@ -17,7 +17,6 @@ validate_env() {
         "CF_Zone_ID"
         "FP_PROXY_SERVER_KEYPAIR_PWD"
         "FP_APP_TOKEN_PASS"
-        "FP_PROXY_SERVER_ADVANCED"
     )
     
     local missing_vars=()
