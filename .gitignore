@@ -216,3 +216,5 @@ logs
 nohup.out
 
 .claude
+
+acme.sh
