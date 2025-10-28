@@ -30,6 +30,7 @@ from urllib3.util.retry import Retry
 class Config:
     """Configuration with validation and fail-fast."""
 
+    FP_OWNER_USER_ID: str = os.getenv("FP_OWNER_USER_ID", "")
     # App
     FP_APP_TOKEN_PASS: str = os.getenv("FP_APP_TOKEN_PASS", "")
     FP_APP_BASE_URL: str = os.getenv("FP_APP_BASE_URL", "")
@@ -614,9 +615,10 @@ class TokenRotator:
 
         try:
             response = http_client.post(
-                url=f"{self._base_url}/api/auth/exchange",
+                url=f"{self._base_url}/api/auth/exchange/private",
                 headers={"authorization": f"Bearer {current_token}"},
                 json={
+                    "uid": Config.FP_OWNER_USER_ID,
                     "url": Config.FP_PROXY_SERVER_URL,
                     "status": ProxyRequestCounter.status(),
                     "id": Config.FP_PROXY_SERVER_ID,
