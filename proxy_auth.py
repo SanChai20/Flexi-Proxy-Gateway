@@ -96,9 +96,6 @@ class Config:
         if not cls.FP_APP_BASE_URL.startswith(("http://", "https://")):
             raise ValueError("FP_APP_BASE_URL must be a valid HTTP(S) URL")
 
-        if not cls.FP_PROXY_SERVER_URL.startswith(("http://", "https://")):
-            raise ValueError("FP_PROXY_SERVER_URL must be a valid HTTP(S) URL")
-
 
 class LoggerManager:
     """Lightweight logger with minimal overhead."""
