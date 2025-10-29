@@ -290,7 +290,7 @@ echo "Step 9: Setting Runtime Environment"
 echo "========================================="
 echo ""
 
-export FP_PROXY_SERVER_URL="https://$APP_SUBDOMAIN_NAME"
+export FP_PROXY_SERVER_URL="$APP_SUBDOMAIN_NAME"
 export FP_PROXY_SERVER_ID=$(expr match "$APP_SUBDOMAIN_NAME" '\([^\.]*\)\..*')
 export FP_APP_BASE_URL="https://www.$APP_DOMAIN"
 
