@@ -65,7 +65,7 @@ class Config:
 
     # Logging
     FP_LOG_LEVEL: str = os.getenv("FP_LOG_LEVEL", "WARNING")
-    FP_LOG_DIR: str = os.getenv("FP_LOG_DIR", "./logs")
+    FP_LOG_DIR: str = os.getenv("FP_LOG_DIR", "/var/log/litellm")
     FP_LOG_FILE: str = os.getenv("FP_LOG_FILE", "proxy_auth.log")
     FP_LOG_BACKUP_COUNT: int = int(os.getenv("FP_LOG_BACKUP_COUNT", "7"))
 
