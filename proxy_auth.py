@@ -18,7 +18,6 @@ from typing import Any, ContextManager, Dict, Iterator, Literal, Optional, Tuple
 import requests
 from cachetools import LRUCache
 from cryptography.fernet import Fernet
-from litellm import models_by_provider
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -709,18 +708,6 @@ if Config.FP_DIAG == 1:
 
 # Initialize HTTP client
 http_client = HTTPClient()
-
-# Register proxy server
-try:
-    response = http_client.post(
-        f"{Config.FP_APP_BASE_URL}/api/{Config.FP_PROXY_SERVER_ID}/registry",
-        headers={"authorization": f"Bearer {Config.FP_APP_TOKEN_PASS}"},
-        json={"models_by_provider": convert_sets_to_lists(models_by_provider)},
-    )
-    response.raise_for_status()
-    LoggerManager.info("Proxy server registered successfully")
-except Exception as e:
-    LoggerManager.error(f"Failed to register proxy server: {e}", exc_info=True)
 
 # Initialize token rotation
 token_rotator = EncryptedTokenRotator(
