@@ -67,6 +67,7 @@ validate_env() {
         "CF_Zone_ID"
         "FP_APP_TOKEN_PASS"
         "FP_PROXY_SERVER_OWNER"
+        "TOGETHERAI_API_KEY"
     )
     
     local missing_vars=()

@@ -6,6 +6,7 @@ model_list:
   - model_name: "*"
     litellm_params:
       model: "*"
+      api_key: os.environ/TOGETHERAI_API_KEY
       # No max_retries here - let HTTP client handle retries
       # No api_key here - injected by pre_call_hook
 
