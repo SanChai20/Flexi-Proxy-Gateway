@@ -1,7 +1,6 @@
 # proxy_handler.py - Minimal Production Version
 from __future__ import annotations
 
-import json
 from typing import Literal
 
 from litellm.caching.dual_cache import DualCache
@@ -14,7 +13,7 @@ class FlexiProxyCustomHandler(CustomLogger):
     Minimal custom handler for FlexiProxy.
 
     Responsibilities:
-    - Extract FlexiProxy metadata (fp_mid, fp_key, fp_llm)
+    - Extract FlexiProxy metadata (fp_mid)
     - Inject API key and model into request
     - Merge custom litellm_params
     """
@@ -44,8 +43,6 @@ class FlexiProxyCustomHandler(CustomLogger):
 
         Extracts from user_api_key_dict.metadata:
         - fp_mid: Target model ID
-        - fp_key: API key for the provider
-        - fp_llm: Custom litellm_params (JSON string)
         """
 
         try:
@@ -57,48 +54,20 @@ class FlexiProxyCustomHandler(CustomLogger):
 
             # Extract required credentials
             mid = metadata.pop("fp_mid", None)  # type: ignore
-            key = metadata.pop("fp_key", None)  # type: ignore
-
-            if not mid or not key:
-                raise ValueError("Internal Error: Missing credentials")
 
             # Validate data is a dictionary
             if not isinstance(data, dict):
                 raise ValueError("Internal Error: Invalid data format")
 
-            # Inject API key and model
-            data["api_key"] = key
+            # Inject model
             data["model"] = mid
-
-            # Process custom litellm_params if provided
-            llm = metadata.pop("fp_llm", None)  # type: ignore
-            if llm and isinstance(llm, str) and llm.strip():
-                try:
-                    llm_params = json.loads(llm)
-
-                    if isinstance(llm_params, dict):
-                        # Merge litellm_params
-                        if "litellm_params" not in data:
-                            data["litellm_params"] = llm_params
-                        else:
-                            existing_params = data.get("litellm_params", {})  # type: ignore
-                            if isinstance(existing_params, dict):
-                                data["litellm_params"] = {
-                                    **existing_params,
-                                    **llm_params,
-                                }
-                            else:
-                                data["litellm_params"] = llm_params
-
-                except json.JSONDecodeError:
-                    raise ValueError("Invalid LLM Params Format")
 
             # Validate required fields for specific call types
             if call_type == "completion" and "messages" not in data:
                 raise ValueError("Missing required field: messages")
 
             # Security: Remove sensitive fields
-            for field in ["fp_mid", "fp_key", "fp_llm", "user_id", "team_id"]:
+            for field in ["fp_mid", "user_id", "team_id"]:
                 data.pop(field, None)  # type: ignore
 
             return data

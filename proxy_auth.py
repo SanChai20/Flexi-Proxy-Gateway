@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import logging
 import os
@@ -19,8 +18,6 @@ from typing import Any, ContextManager, Dict, Iterator, Literal, Optional, Tuple
 import requests
 from cachetools import LRUCache
 from cryptography.fernet import Fernet
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from litellm import models_by_provider
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from requests.adapters import HTTPAdapter
@@ -35,10 +32,9 @@ class Config:
     FP_APP_BASE_URL: str = os.getenv("FP_APP_BASE_URL", "")
 
     # Proxy Server
+    FP_PROXY_SERVER_OWNER: str = os.getenv("FP_PROXY_SERVER_OWNER", "admin")
     FP_PROXY_SERVER_URL: str = os.getenv("FP_PROXY_SERVER_URL", "")
     FP_PROXY_SERVER_ID: str = os.getenv("FP_PROXY_SERVER_ID", "")
-    FP_PROXY_SERVER_KEYPAIR_PWD: str = os.getenv("FP_PROXY_SERVER_KEYPAIR_PWD", "")
-    FP_PROXY_SERVER_KEYPAIR_DIR: str = os.getenv("FP_PROXY_SERVER_KEYPAIR_DIR", "..")
     FP_PROXY_SERVER_FERNET_KEY: str = os.getenv("FP_PROXY_SERVER_FERNET_KEY", "")
 
     # LRU Cache
@@ -80,8 +76,8 @@ class Config:
             "FP_APP_BASE_URL",
             "FP_PROXY_SERVER_URL",
             "FP_PROXY_SERVER_ID",
-            "FP_PROXY_SERVER_KEYPAIR_PWD",
             "FP_PROXY_SERVER_FERNET_KEY",
+            "FP_PROXY_SERVER_OWNER",
         ]
 
         missing = [field for field in required_fields if not getattr(cls, field)]
@@ -379,7 +375,9 @@ class HTTPClient:
 
         return session
 
-    def post(self, url: str, headers: Dict[str, str], json: Any) -> requests.Response:
+    def post(
+        self, url: str, headers: Dict[str, str], json: Optional[Any] = None
+    ) -> requests.Response:
         return self.session.post(url, timeout=self.timeout, headers=headers, json=json)
 
     def get(self, url: str, headers: Dict[str, str]) -> requests.Response:
@@ -393,8 +391,6 @@ class HybridCrypto:
     """Crypto operations with minimal overhead."""
 
     __slots__ = ()
-    _private_key: Optional[rsa.RSAPrivateKey] = None
-    _public_key: Optional[str] = None
     _fernet_cipher: Optional[Fernet] = None
     _lock: threading.Lock = threading.Lock()
 
@@ -429,71 +425,7 @@ class HybridCrypto:
         return cls._get_fernet().decrypt(token)
 
     @classmethod
-    def asymmetric_public_key(cls) -> Optional[str]:
-        return cls._public_key
-
-    @classmethod
-    def asymmetric_decrypt(cls, msg_bytes: bytes) -> Optional[str]:
-        if cls._private_key is None:
-            return None
-
-        try:
-            message_decrypted = cls._private_key.decrypt(
-                msg_bytes,
-                padding.OAEP(
-                    mgf=padding.MGF1(algorithm=hashes.SHA256()),
-                    algorithm=hashes.SHA256(),
-                    label=None,
-                ),
-            )
-            return message_decrypted.decode("utf-8")
-        except Exception as e:
-            LoggerManager.error(f"Asymmetric decryption failed: {e}")
-            return None
-
-    @classmethod
-    def load(cls) -> bool:
-        output_dir = Path(Config.FP_PROXY_SERVER_KEYPAIR_DIR).resolve()
-        key_file_path = output_dir / "key.pem"
-        public_file_path = output_dir / "public.pem"
-
-        if not key_file_path.exists():
-            LoggerManager.error(f"Private key file not found: {key_file_path}")
-            return False
-
-        if not public_file_path.exists():
-            LoggerManager.error(f"Public key file not found: {public_file_path}")
-            return False
-
-        if not Config.FP_PROXY_SERVER_KEYPAIR_PWD:
-            LoggerManager.error("Key password not configured")
-            return False
-
-        try:
-            private_pem_bytes = key_file_path.read_bytes()
-            public_pem_bytes = public_file_path.read_bytes()
-            password = Config.FP_PROXY_SERVER_KEYPAIR_PWD.encode("ascii")
-
-            private_key = serialization.load_pem_private_key(
-                private_pem_bytes, password=password
-            )
-
-            if not isinstance(private_key, rsa.RSAPrivateKey):
-                raise TypeError("Expected RSAPrivateKey")
-
-            cls._private_key = private_key
-            cls._public_key = public_pem_bytes.decode("utf-8")
-            LoggerManager.info("Cryptographic keys loaded successfully")
-            return True
-
-        except Exception as e:
-            LoggerManager.error(f"Failed to load keys: {e}", exc_info=True)
-            return False
-
-    @classmethod
     def unload(cls) -> None:
-        cls._private_key = None
-        cls._public_key = None
         cls._fernet_cipher = None
 
 
@@ -637,6 +569,7 @@ class TokenRotator:
                     "url": Config.FP_PROXY_SERVER_URL,
                     "status": ProxyRequestCounter.status(),
                     "id": Config.FP_PROXY_SERVER_ID,
+                    "owner": Config.FP_PROXY_SERVER_OWNER,
                 },
             )
 
@@ -789,11 +722,6 @@ try:
 except Exception as e:
     LoggerManager.error(f"Failed to register proxy server: {e}", exc_info=True)
 
-# Load crypto keys
-if not HybridCrypto.load():
-    LoggerManager.error("Failed to load cryptographic keys")
-    sys.exit(1)
-
 # Initialize token rotation
 token_rotator = EncryptedTokenRotator(
     base_url=Config.FP_APP_BASE_URL,
@@ -837,18 +765,17 @@ _CACHE_TTL = 7200  # 2 hours
 
 
 class CacheEntry:
-    __slots__ = ("enc", "mid", "llm", "expires_at")
+    __slots__ = ("mid", "llm", "expires_at")
 
-    def __init__(self, enc: bytes, mid: str, llm: str, ttl: int = 3600):
-        self.enc = enc
+    def __init__(self, mid: str, ttl: int = 3600):
         self.mid = mid
-        self.llm = llm
         self.expires_at = time.time() + ttl
 
     def is_valid(self) -> bool:
         return time.time() < self.expires_at
 
 
+# api_key: User Token Pass Issued By FlexiProxy
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
     """
     Custom authentication hook for LiteLLM - Optimized version.
@@ -866,11 +793,7 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
         ProxyRequestCounter.increment()
         return UserAPIKeyAuth(
             metadata={
-                "fp_key": HybridCrypto.symmetric_decrypt(cache_entry.enc).decode(
-                    "utf-8"
-                ),
                 "fp_mid": cache_entry.mid,
-                "fp_llm": cache_entry.llm,
             },
             api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
@@ -895,31 +818,20 @@ async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIK
                     "X-API-Key": api_key,
                     "X-Proxy-Id": Config.FP_PROXY_SERVER_ID,
                 },
-                json={"public_key": HybridCrypto.asymmetric_public_key()},
             )
             response.raise_for_status()
             response_data = response.json()
 
-        # Decrypt the key
-        message_bytes = base64.b64decode(response_data["enc"])
-        message_decrypted = HybridCrypto.asymmetric_decrypt(message_bytes)
-        if not message_decrypted:
-            raise ValueError("Failed to decrypt API key")
-
         # Cache the result
         entry = CacheEntry(
-            enc=HybridCrypto.symmetric_encrypt(message_decrypted),
             mid=response_data["mid"],
-            llm=response_data["llm"],
             ttl=_CACHE_TTL,
         )
         _key_cache[hashed_token] = entry
         ProxyRequestCounter.increment()
         return UserAPIKeyAuth(
             metadata={
-                "fp_key": message_decrypted,
                 "fp_mid": entry.mid,
-                "fp_llm": entry.llm,
             },
             api_key=api_key,
             user_role=LitellmUserRoles.CUSTOMER,
