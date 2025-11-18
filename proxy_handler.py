@@ -1,6 +1,7 @@
 # proxy_handler.py - Minimal Production Version
 from __future__ import annotations
 
+import os
 from typing import Literal
 
 from litellm.caching.dual_cache import DualCache
@@ -60,7 +61,9 @@ class FlexiProxyCustomHandler(CustomLogger):
                 raise ValueError("Internal Error: Invalid data format")
 
             # Inject model
-            data["model"] = mid
+            data["model"] = (
+                f'{os.getenv("LITELLM_PROVIDER_PREFIX", "fireworks_ai")}/{mid}'
+            )
 
             # Validate required fields for specific call types
             if call_type == "completion" and "messages" not in data:
