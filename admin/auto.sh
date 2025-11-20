@@ -39,12 +39,63 @@ log_debug() {
     fi
 }
 
+sync_progress() {
+    local step=$1
+    local total=$2
+    local status=$3  # success, error, running
+    local message=$4
+    
+    if [ -z "$APP_DOMAIN" ]; then
+        log_debug "SYNC" "Progress sync URL not configured, skipping sync"
+        return 0
+    fi
+    
+    local payload=$(cat <<EOF
+{
+    "domain": "$APP_SUBDOMAIN_NAME",
+    "step": $step,
+    "total_steps": $total,
+    "status": "$status",
+    "message": "$message",
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+)
+    curl -X POST "https://$APP_DOMAIN/api/auth/deployment/progress" \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $FP_APP_TOKEN_PASS" \
+        -d "$payload" \
+        --max-time 5 \
+        --silent \
+        --show-error \
+        > /dev/null 2>&1 || log_warning "SYNC" "Failed to sync progress to server"
+}
+
 # Progress indicator
 log_progress() {
     local step=$1
     local total=$2
     local message=$3
     log "PROGRESS" "DEPLOYMENT" "Step ${step}/${total}: ${message}"
+    sync_progress "$step" "$total" "running" "$message"
+}
+
+log_step_success() {
+    local component=$1
+    local step=$2
+    local total=$3
+    local message=$4
+    log_success "$component" "$message"
+    sync_progress "$step" "$total" "success" "$message"
+}
+
+log_step_error() {
+    local component=$1
+    local step=$2
+    local total=$3
+    local message=$4
+    log_error "$component" "$message"
+    sync_progress "$step" "$total" "error" "$message"
 }
 
 # ========================================
@@ -91,7 +142,7 @@ log_info "DEPLOYMENT" "========================================="
 # Validate environment variables
 log_progress "0" "9" "Validating environment variables"
 validate_env
-log_success "ENV_VALIDATION" "All required environment variables are set"
+log_step_success "ENV_VALIDATION" "0" "9" "All required environment variables are set"
 
 # Set default values for optional variables
 export LITELLM_SERVER_PORT=${LITELLM_SERVER_PORT:-4000}
@@ -140,7 +191,7 @@ source .venv/bin/activate
 log_info "DEPENDENCIES" "Installing Python packages from requirements.txt"
 pip install -r requirements.txt > /dev/null 2>&1
 
-log_success "DEPENDENCIES" "Dependencies installed successfully"
+log_step_success "DEPENDENCIES" "1" "9" "Dependencies installed successfully"
 
 # ========================================
 # Step 2: Install acme.sh
@@ -167,7 +218,7 @@ else
     export ACME_SH="$HOME/.acme.sh/acme.sh"
 fi
 
-log_success "ACME" "acme.sh installed successfully"
+log_step_success "ACME" "2" "9" "acme.sh installed successfully"
 
 # ========================================
 # Step 3: Configure DNS
@@ -181,9 +232,9 @@ log_info "DNS" "Creating DNS A record"
 python3 admin/a_record_create.py
 
 if [ $? -eq 0 ]; then
-    log_success "DNS" "DNS A record configured successfully"
+    log_step_success "DNS" "3" "9" "DNS A record configured successfully"
 else
-    log_error "DNS" "Failed to configure DNS record"
+    log_step_error "DNS" "3" "9" "Failed to configure DNS record"
     exit 1
 fi
 
@@ -195,9 +246,9 @@ log_progress "4" "9" "Issuing SSL Certificate"
 log_info "SSL" "Requesting SSL certificate via Cloudflare DNS"
 
 if $ACME_SH --issue --dns dns_cf -d "$APP_DOMAIN" -d "$APP_SUBDOMAIN_NAME" > /dev/null 2>&1; then
-    log_success "SSL" "SSL certificate issued successfully"
+    log_step_success "SSL" "4" "9" "SSL certificate issued successfully"
 else
-    log_error "SSL" "Failed to issue SSL certificate"
+    log_step_error "SSL" "4" "9" "Failed to issue SSL certificate"
     exit 1
 fi
 
@@ -217,9 +268,9 @@ $ACME_SH --install-cert -d "$APP_DOMAIN" \
     --reloadcmd      "service nginx force-reload" > /dev/null 2>&1
 
 if [ $? -eq 0 ]; then
-    log_success "SSL" "Certificate installed successfully"
+    log_step_success "SSL" "5" "9" "Certificate installed successfully"
 else
-    log_error "SSL" "Failed to install certificate to Nginx"
+    log_step_error "SSL" "5" "9" "Failed to install certificate to Nginx"
     exit 1
 fi
 
@@ -277,15 +328,15 @@ sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
 # Test and reload Nginx
 log_info "NGINX" "Testing Nginx configuration"
 if sudo nginx -t > /dev/null 2>&1; then
-    log_success "NGINX" "Nginx configuration test passed"
+    log_step_success "NGINX" "6" "9" "Nginx configuration test passed"
 else
-    log_error "NGINX" "Nginx configuration test failed"
+    log_step_error "NGINX" "6" "9" "Nginx configuration test failed"
     exit 1
 fi
 
 log_info "NGINX" "Reloading Nginx service"
 sudo systemctl reload nginx
-log_success "NGINX" "Nginx configured and reloaded successfully"
+log_step_success "NGINX" "6" "9" "Nginx configured and reloaded successfully"
 
 # ========================================
 # Step 7: Generate Fernet Key
@@ -303,11 +354,11 @@ export FP_PROXY_SERVER_FERNET_KEY=$(cat "$TEMP_FILE")
 rm "$TEMP_FILE"
 
 if [ -z "$FP_PROXY_SERVER_FERNET_KEY" ]; then
-    log_error "FERNET" "Failed to generate Fernet encryption key"
+    log_step_error "FERNET" "7" "9" "Failed to generate Fernet encryption key"
     exit 1
 fi
 
-log_success "FERNET" "Fernet encryption key generated successfully"
+log_step_success "FERNET" "7" "9" "Fernet encryption key generated successfully"
 
 # ========================================
 # Step 8: Set Runtime Environment Variables
@@ -319,7 +370,7 @@ export FP_PROXY_SERVER_ID=$(expr match "$APP_SUBDOMAIN_NAME" '\([^\.]*\)\..*')
 export FP_APP_BASE_URL="https://www.$APP_DOMAIN"
 
 log_info "CONFIG" "Runtime environment variables configured"
-log_success "CONFIG" "Server configuration completed"
+log_step_success "CONFIG" "8" "9" "Server configuration completed"
 
 # ========================================
 # Step 9: Launch Server
@@ -337,18 +388,15 @@ nohup litellm --config config.yaml --port "$LITELLM_SERVER_PORT" > litellm.log 2
 # Wait and verify
 sleep 3
 if pgrep -f "litellm.*$LITELLM_SERVER_PORT" > /dev/null; then
-    log_success "SERVER" "Server launched successfully"
+    log_step_success "SERVER" "9" "9" "Server launched successfully"
 else
-    log_error "SERVER" "Server failed to start - check litellm.log for details"
+    log_step_error "SERVER" "9" "9" "Server failed to start - check litellm.log for details"
     exit 1
 fi
 
 # ========================================
 # Deployment Summary
 # ========================================
-log_info "DEPLOYMENT" "========================================="
-log_success "DEPLOYMENT" "DEPLOYMENT COMPLETED SUCCESSFULLY"
-log_info "DEPLOYMENT" "========================================="
 log_info "SUMMARY" "SSL certificate installed and configured"
 log_info "SUMMARY" "SSL auto-renewal enabled (60 days before expiry)"
 log_info "SUMMARY" "Nginx reverse proxy configured"
