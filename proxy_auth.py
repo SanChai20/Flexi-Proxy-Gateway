@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import os
@@ -8,7 +9,7 @@ import ssl
 import sys
 import threading
 import time
-from contextlib import contextmanager, nullcontext
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from datetime import datetime
 from itertools import count
 from logging.handlers import TimedRotatingFileHandler
@@ -66,6 +67,11 @@ class Config:
     FP_DIAG: int = int(os.getenv("FP_DIAG", "1"))
     FP_DIAG_SLOW_MS: int = int(os.getenv("FP_DIAG_SLOW_MS", "20"))
     FP_DIAG_SAMPLE_RATE: float = float(os.getenv("FP_DIAG_SAMPLE_RATE", "1.0"))
+
+    # Request Queue
+    FP_QUEUE_MAX_CONCURRENT: int = int(os.getenv("FP_QUEUE_MAX_CONCURRENT", "50"))
+    FP_QUEUE_TIMEOUT: int = int(os.getenv("FP_QUEUE_TIMEOUT", "30"))
+    FP_QUEUE_ENABLED: bool = os.getenv("FP_QUEUE_ENABLED", "true").lower() == "true"
 
     @classmethod
     def validate(cls) -> None:
@@ -270,6 +276,61 @@ class Diag:
     @classmethod
     def new_req_id(cls) -> int:
         return next(cls._req_id_counter)
+
+
+class RequestQueueManager:
+    """轻量级请求队列管理器，基于信号量实现并发控制"""
+
+    __slots__ = (
+        "_semaphore",
+        "_max_concurrent",
+        "_queue_timeout",
+        "_active_count",
+        "_lock",
+    )
+
+    def __init__(self, max_concurrent: int = 50, queue_timeout: int = 30):
+        """
+        Args:
+            max_concurrent: 最大并发请求数
+            queue_timeout: 队列等待超时时间（秒）
+        """
+        self._max_concurrent = max_concurrent
+        self._queue_timeout = queue_timeout
+        self._semaphore = asyncio.Semaphore(max_concurrent)
+        self._active_count = 0
+        self._lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def acquire(self):
+        """获取队列槽位"""
+        try:
+            # 尝试获取信号量，带超时
+            async with asyncio.timeout(self._queue_timeout):
+                await self._semaphore.acquire()
+
+            async with self._lock:
+                self._active_count += 1
+
+            try:
+                yield
+            finally:
+                self._semaphore.release()
+                async with self._lock:
+                    self._active_count -= 1
+
+        except asyncio.TimeoutError:
+            raise ValueError(
+                f"Request queue full, please retry later (timeout: {self._queue_timeout}s)"
+            )
+
+    def get_stats(self) -> dict:
+        """获取队列状态"""
+        return {
+            "active_requests": self._active_count,
+            "max_concurrent": self._max_concurrent,
+            "available_slots": self._max_concurrent - self._active_count,
+        }
 
 
 class ProxyRequestCounter:
@@ -680,6 +741,8 @@ def convert_sets_to_lists(obj: Any) -> Any:
 # Module Initialization
 # ============================================================================
 
+_request_queue: Optional[RequestQueueManager] = None
+
 # Validate configuration first
 try:
     Config.validate()
@@ -745,6 +808,23 @@ _key_cache: TimestampedLRUCache = TimestampedLRUCache(
 )
 
 
+def _init_request_queue():
+    """初始化请求队列"""
+    global _request_queue
+    if Config.FP_QUEUE_ENABLED and _request_queue is None:
+        _request_queue = RequestQueueManager(
+            max_concurrent=Config.FP_QUEUE_MAX_CONCURRENT,
+            queue_timeout=Config.FP_QUEUE_TIMEOUT,
+        )
+        LoggerManager.info(
+            f"Request queue initialized: max_concurrent={Config.FP_QUEUE_MAX_CONCURRENT}, "
+            f"timeout={Config.FP_QUEUE_TIMEOUT}s"
+        )
+
+
+# Initialize request queue
+_init_request_queue()
+
 # ============================================================================
 # LiteLLM Auth Hook
 # ============================================================================
@@ -765,72 +845,73 @@ class CacheEntry:
 # api_key: User Token Pass Issued By FlexiProxy
 async def user_api_key_auth(request: requests.Request, api_key: str) -> UserAPIKeyAuth:
     """
-    Custom authentication hook for LiteLLM - Optimized version.
+    Custom authentication hook for LiteLLM - with request queue.
     """
 
     if not api_key:
         raise ValueError("API key is required")
+
     req_id = Diag.new_req_id() if Config.FP_DIAG == 1 else 0
-    # cache lookup
-    # Hash API key for cache lookup
-    hashed_token = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-    # Check cache first
-    cache_entry: CacheEntry | None = _key_cache[hashed_token]
-    if cache_entry and cache_entry.is_valid():
-        ProxyRequestCounter.increment()
-        return UserAPIKeyAuth(
-            metadata={
-                "fp_mid": cache_entry.mid,
-            },
-            api_key=api_key,
-            user_role=LitellmUserRoles.CUSTOMER,
-        )
-    # Get current app token
-    app_token = token_rotator.get_token()
-    if not app_token:
-        raise RuntimeError("Failed to obtain app token")
 
-    # Validate API key with backend
-    try:
-        post_cm: ContextManager[None] = (
-            Diag.stage_timer("http_post", req_id)
-            if Config.FP_DIAG == 1
-            else nullcontext()
-        )
-        with post_cm:
-            response = http_client.post(
-                f"{Config.FP_APP_BASE_URL}/api/auth/validate",
-                headers={
-                    "authorization": f"Bearer {app_token}",
-                    "X-API-Key": api_key,
-                    "X-Proxy-Id": Config.FP_PROXY_SERVER_ID,
-                },
+    # 队列控制
+    queue_cm = _request_queue.acquire() if _request_queue else nullcontext()
+
+    async with queue_cm:
+        # Hash API key for cache lookup
+        hashed_token = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+        # Check cache first
+        cache_entry: CacheEntry | None = _key_cache[hashed_token]
+        if cache_entry and cache_entry.is_valid():
+            ProxyRequestCounter.increment()
+            return UserAPIKeyAuth(
+                metadata={"fp_mid": cache_entry.mid},
+                api_key=api_key,
+                user_role=LitellmUserRoles.CUSTOMER,
             )
-            response.raise_for_status()
-            response_data = response.json()
 
-        # Cache the result
-        entry = CacheEntry(
-            mid=response_data["mid"],
-            ttl=_CACHE_TTL,
-        )
-        _key_cache[hashed_token] = entry
-        ProxyRequestCounter.increment()
-        return UserAPIKeyAuth(
-            metadata={
-                "fp_mid": entry.mid,
-            },
-            api_key=api_key,
-            user_role=LitellmUserRoles.CUSTOMER,
-        )
-    except requests.HTTPError as e:
-        status_code = e.response.status_code if e.response else 0
-        if status_code == 401:
-            raise ValueError("Invalid API key")
-        elif status_code == 403:
-            raise ValueError("Access forbidden")
-        else:
-            raise RuntimeError("Authentication service error")
-    except Exception as e:
-        LoggerManager.error(f"Auth error: {e}", exc_info=True)
-        raise RuntimeError("Authentication failed")
+        # Get current app token
+        app_token = token_rotator.get_token()
+        if not app_token:
+            raise RuntimeError("Failed to obtain app token")
+
+        # Validate API key with backend
+        try:
+            post_cm: ContextManager[None] = (
+                Diag.stage_timer("http_post", req_id)
+                if Config.FP_DIAG == 1
+                else nullcontext()
+            )
+            with post_cm:
+                response = http_client.post(
+                    f"{Config.FP_APP_BASE_URL}/api/auth/validate",
+                    headers={
+                        "authorization": f"Bearer {app_token}",
+                        "X-API-Key": api_key,
+                        "X-Proxy-Id": Config.FP_PROXY_SERVER_ID,
+                    },
+                )
+                response.raise_for_status()
+                response_data = response.json()
+
+            # Cache the result
+            entry = CacheEntry(mid=response_data["mid"], ttl=_CACHE_TTL)
+            _key_cache[hashed_token] = entry
+            ProxyRequestCounter.increment()
+
+            return UserAPIKeyAuth(
+                metadata={"fp_mid": entry.mid},
+                api_key=api_key,
+                user_role=LitellmUserRoles.CUSTOMER,
+            )
+        except requests.HTTPError as e:
+            status_code = e.response.status_code if e.response else 0
+            if status_code == 401:
+                raise ValueError("Invalid API key")
+            elif status_code == 403:
+                raise ValueError("Access forbidden")
+            else:
+                raise RuntimeError("Authentication service error")
+        except Exception as e:
+            LoggerManager.error(f"Auth error: {e}", exc_info=True)
+            raise RuntimeError("Authentication failed")
