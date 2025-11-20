@@ -6,7 +6,7 @@ model_list:
   - model_name: "*"
     litellm_params:
       model: "*"
-      api_key: os.environ/FIREWORKS_AI_API_KEY
+      api_key: os.environ/OPENROUTER_KEY
       # No max_retries here - let HTTP client handle retries
       # No api_key here - injected by pre_call_hook
 

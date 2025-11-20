@@ -67,7 +67,7 @@ validate_env() {
         "CF_Zone_ID"
         "FP_APP_TOKEN_PASS"
         "FP_PROXY_SERVER_OWNER"
-        "FIREWORKS_AI_API_KEY"
+        "OPENROUTER_KEY"
     )
     
     local missing_vars=()
@@ -108,7 +108,7 @@ export LITELLM_NUM_WORKERS=${LITELLM_NUM_WORKERS:-4}
 export LITELLM_SET_VERBOSE=${LITELLM_SET_VERBOSE:-False}
 export LITELLM_DROP_PARAMS=${LITELLM_DROP_PARAMS:-True}
 export LITELLM_MODE=${LITELLM_MODE:-PRODUCTION}
-export LITELLM_PROVIDER_PREFIX=${LITELLM_PROVIDER_PREFIX:-fireworks_ai}
+export LITELLM_PROVIDER_PREFIX=${LITELLM_PROVIDER_PREFIX:-openrouter}
 export NO_DOCS=${NO_DOCS:-True}
 export NO_REDOC=${NO_REDOC:-True}
 

@@ -62,7 +62,7 @@ class FlexiProxyCustomHandler(CustomLogger):
 
             # Inject model
             data["model"] = (
-                f'{os.getenv("LITELLM_PROVIDER_PREFIX", "fireworks_ai")}/{mid}'
+                f'{os.getenv("LITELLM_PROVIDER_PREFIX", "openrouter")}/{mid}'
             )
 
             # Validate required fields for specific call types
