@@ -80,5 +80,14 @@ class FlexiProxyCustomHandler(CustomLogger):
         except Exception:
             raise ValueError("Internal Error")
 
+    async def async_post_call_success_hook(
+        self,
+        data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+        response,
+    ):
+        # TODO...
+        pass
+
 
 proxy_handler_instance = FlexiProxyCustomHandler()
