@@ -221,14 +221,24 @@ log_progress "3" "9" "Configuring DNS.."
 
 export PUBLIC_SERVER_IP=$(curl -s -4 ifconfig.me)
 log_info "DNS" "Retrieving server public IP"
-
 log_info "DNS" "Creating DNS A record"
-python3 admin/a_record_create.py
 
-if [ $? -eq 0 ]; then
-    # log_step_success "DNS" "3" "9" "DNS A record configured successfully"
+set +e
+DNS_OUTPUT=$(timeout 30 python3 admin/a_record_create.py 2>&1)
+DNS_EXIT_CODE=$?
+set -e
+
+log_debug "DNS" "Script output: $DNS_OUTPUT"
+log_debug "DNS" "Exit code: $DNS_EXIT_CODE"
+
+if [ $DNS_EXIT_CODE -eq 0 ]; then
+    log_info "DNS" "DNS A record configured successfully"
+elif [ $DNS_EXIT_CODE -eq 124 ]; then
+    log_step_error "DNS" "3" "9" "DNS configuration timed out (but record may exist)"
+    exit 1
 else
-    log_step_error "DNS" "3" "9" "Failed to configure DNS record"
+    log_step_error "DNS" "3" "9" "Failed to configure DNS record (exit code: $DNS_EXIT_CODE)"
+    echo "$DNS_OUTPUT" >&2
     exit 1
 fi
 
@@ -240,7 +250,7 @@ log_progress "4" "9" "Issuing SSL Certificate.."
 log_info "SSL" "Requesting SSL certificate via Cloudflare DNS"
 
 if $ACME_SH --issue --dns dns_cf -d "$APP_DOMAIN" -d "$APP_SUBDOMAIN_NAME" > /dev/null 2>&1; then
-    # log_step_success "SSL" "4" "9" "SSL certificate issued successfully"
+    log_info "SSL" "SSL certificate issued successfully"
 else
     log_step_error "SSL" "4" "9" "Failed to issue SSL certificate"
     exit 1
@@ -262,7 +272,7 @@ $ACME_SH --install-cert -d "$APP_DOMAIN" \
     --reloadcmd      "service nginx force-reload" > /dev/null 2>&1
 
 if [ $? -eq 0 ]; then
-    # log_step_success "SSL" "5" "9" "Certificate installed successfully"
+    log_info "SSL" "Certificate installed successfully"
 else
     log_step_error "SSL" "5" "9" "Failed to install certificate to Nginx"
     exit 1
@@ -322,7 +332,7 @@ sudo ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
 # Test and reload Nginx
 log_info "NGINX" "Testing Nginx configuration"
 if sudo nginx -t > /dev/null 2>&1; then
-    # log_step_success "NGINX" "6" "9" "Nginx configuration test passed"
+    log_info "NGINX" "Nginx configuration test passed"
 else
     log_step_error "NGINX" "6" "9" "Nginx configuration test failed"
     exit 1
@@ -378,7 +388,7 @@ nohup litellm --config config.yaml --port "$LITELLM_SERVER_PORT" > litellm.log 2
 # Wait and verify
 sleep 3
 if pgrep -f "litellm.*$LITELLM_SERVER_PORT" > /dev/null; then
-    # log_step_success "SERVER" "9" "9" "Server launched successfully"
+    log_info "SERVER" "Server launched successfully"
 else
     log_step_error "SERVER" "9" "9" "Server failed to start - check litellm.log for details"
     exit 1
