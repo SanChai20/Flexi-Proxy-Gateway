@@ -61,7 +61,7 @@ sync_progress() {
 }
 EOF
 )
-    curl -X POST "https://$APP_DOMAIN/api/auth/deployment/progress" \
+    curl -X POST "https://www.$APP_DOMAIN/api/auth/deployment/progress" \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer $FP_APP_TOKEN_PASS" \
         -d "$payload" \
