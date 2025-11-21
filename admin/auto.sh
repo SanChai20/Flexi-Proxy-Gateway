@@ -249,11 +249,18 @@ log_progress "4" "9" "Issuing SSL Certificate.."
 
 log_info "SSL" "Requesting SSL certificate via Cloudflare DNS"
 
-if $ACME_SH --issue --dns dns_cf -d "$APP_DOMAIN" -d "$APP_SUBDOMAIN_NAME" > /dev/null 2>&1; then
-    log_info "SSL" "SSL certificate issued successfully"
+if $ACME_SH --issue --dns dns_cf \
+    -d "$APP_DOMAIN" \
+    -d "*.$APP_DOMAIN" > /dev/null 2>&1; then
+    log_info "SSL" "Wildcard SSL certificate issued successfully"
 else
-    log_step_error "SSL" "4" "9" "Failed to issue SSL certificate"
-    exit 1
+    # 检查证书是否已存在
+    if $ACME_SH --list | grep -q "$APP_DOMAIN"; then
+        log_info "SSL" "Wildcard certificate already exists, skipping issuance"
+    else
+        log_step_error "SSL" "4" "9" "Failed to issue wildcard SSL certificate"
+        exit 1
+    fi
 fi
 
 # ========================================
@@ -261,7 +268,7 @@ fi
 # ========================================
 log_progress "5" "9" "Installing Certificate on Nginx.."
 
-CERT_DIR="/etc/nginx/ssl/$APP_SUBDOMAIN_NAME"
+CERT_DIR="/etc/nginx/ssl/$APP_DOMAIN"
 log_info "SSL" "Preparing certificate directory"
 sudo mkdir -p "$CERT_DIR"
 
