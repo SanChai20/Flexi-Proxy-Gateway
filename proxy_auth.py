@@ -832,7 +832,7 @@ _CACHE_TTL = 7200  # 2 hours
 
 
 class CacheEntry:
-    __slots__ = ("mid", "llm", "expires_at")
+    __slots__ = ("mid", "expires_at")
 
     def __init__(self, mid: str, ttl: int = 3600):
         self.mid = mid
