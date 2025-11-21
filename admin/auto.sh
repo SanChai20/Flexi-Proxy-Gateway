@@ -140,7 +140,7 @@ log_info "DEPLOYMENT" "  Flexi-Proxy Full Deployment"
 log_info "DEPLOYMENT" "========================================="
 
 # Validate environment variables
-log_progress "0" "9" "Validating environment variables"
+log_progress "0" "9" "Validating environment variables.."
 validate_env
 
 # Set default values for optional variables
@@ -171,7 +171,7 @@ log_debug "CONFIG" "Configuration loaded successfully"
 # ========================================
 # Step 1: Install Dependencies
 # ========================================
-log_progress "1" "9" "Installing Dependencies"
+log_progress "1" "9" "Installing Dependencies.."
 
 log_info "DEPENDENCIES" "Updating package lists"
 sudo apt update > /dev/null 2>&1
@@ -193,7 +193,7 @@ pip install -r requirements.txt > /dev/null 2>&1
 # ========================================
 # Step 2: Install acme.sh
 # ========================================
-log_progress "2" "9" "Installing acme.sh"
+log_progress "2" "9" "Installing acme.sh.."
 
 if [ -d "$HOME/.acme.sh" ] && [ -f "$HOME/.acme.sh/acme.sh" ]; then
     log_info "ACME" "acme.sh is already installed"
@@ -218,7 +218,7 @@ fi
 # ========================================
 # Step 3: Configure DNS
 # ========================================
-log_progress "3" "9" "Configuring DNS"
+log_progress "3" "9" "Configuring DNS.."
 
 export PUBLIC_SERVER_IP=$(curl -s -4 ifconfig.me)
 log_info "DNS" "Retrieving server public IP"
@@ -236,7 +236,7 @@ fi
 # ========================================
 # Step 4: Issue SSL Certificate
 # ========================================
-log_progress "4" "9" "Issuing SSL Certificate"
+log_progress "4" "9" "Issuing SSL Certificate.."
 
 log_info "SSL" "Requesting SSL certificate via Cloudflare DNS"
 
@@ -250,7 +250,7 @@ fi
 # ========================================
 # Step 5: Install Certificate on Nginx
 # ========================================
-log_progress "5" "9" "Installing Certificate on Nginx"
+log_progress "5" "9" "Installing Certificate on Nginx.."
 
 CERT_DIR="/etc/nginx/ssl/$APP_SUBDOMAIN_NAME"
 log_info "SSL" "Preparing certificate directory"
@@ -272,7 +272,7 @@ fi
 # ========================================
 # Step 6: Configure Nginx
 # ========================================
-log_progress "6" "9" "Configuring Nginx"
+log_progress "6" "9" "Configuring Nginx.."
 
 NGINX_CONF="/etc/nginx/sites-available/$APP_SUBDOMAIN_NAME"
 log_info "NGINX" "Creating Nginx site configuration"
@@ -335,7 +335,7 @@ sudo systemctl reload nginx
 # ========================================
 # Step 7: Generate Fernet Key
 # ========================================
-log_progress "7" "9" "Generating Fernet Encryption Key"
+log_progress "7" "9" "Generating Encryption Key.."
 
 TEMP_FILE=$(mktemp)
 
@@ -355,7 +355,7 @@ fi
 # ========================================
 # Step 8: Set Runtime Environment Variables
 # ========================================
-log_progress "8" "9" "Setting Runtime Environment"
+log_progress "8" "9" "Setting Runtime Environment.."
 
 export FP_PROXY_SERVER_URL="$APP_SUBDOMAIN_NAME"
 export FP_PROXY_SERVER_ID=$(expr match "$APP_SUBDOMAIN_NAME" '\([^\.]*\)\..*')
@@ -366,7 +366,7 @@ log_info "CONFIG" "Runtime environment variables configured"
 # ========================================
 # Step 9: Launch Server
 # ========================================
-log_progress "9" "9" "Launching Litellm Server"
+log_progress "9" "9" "Launching Litellm Server.."
 
 # Stop any existing instances
 log_info "SERVER" "Stopping existing server instances"
@@ -385,6 +385,7 @@ else
     exit 1
 fi
 
+log_full_success "FULL" "9" "9" "Successfully deployed"
 # ========================================
 # Deployment Summary
 # ========================================
@@ -396,5 +397,3 @@ log_info "SUMMARY" "Application logs: ./litellm.log"
 log_info "SUMMARY" "Nginx logs: /var/log/nginx/"
 log_info "NEXT_STEPS" "Verify deployment by checking server health endpoint"
 log_info "DEPLOYMENT" "========================================="
-
-log_full_success "FULL" "9" "9" "Successfully deployed."
