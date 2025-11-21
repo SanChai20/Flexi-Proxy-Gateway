@@ -32,7 +32,6 @@ class Config:
     FP_APP_BASE_URL: str = os.getenv("FP_APP_BASE_URL", "")
 
     # Proxy Server
-    FP_PROXY_SERVER_OWNER: str = os.getenv("FP_PROXY_SERVER_OWNER", "admin")
     FP_PROXY_SERVER_URL: str = os.getenv("FP_PROXY_SERVER_URL", "")
     FP_PROXY_SERVER_ID: str = os.getenv("FP_PROXY_SERVER_ID", "")
     FP_PROXY_SERVER_FERNET_KEY: str = os.getenv("FP_PROXY_SERVER_FERNET_KEY", "")
@@ -82,7 +81,6 @@ class Config:
             "FP_PROXY_SERVER_URL",
             "FP_PROXY_SERVER_ID",
             "FP_PROXY_SERVER_FERNET_KEY",
-            "FP_PROXY_SERVER_OWNER",
         ]
 
         missing = [field for field in required_fields if not getattr(cls, field)]
@@ -629,7 +627,6 @@ class TokenRotator:
                     "url": Config.FP_PROXY_SERVER_URL,
                     "status": ProxyRequestCounter.status(),
                     "id": Config.FP_PROXY_SERVER_ID,
-                    "owner": Config.FP_PROXY_SERVER_OWNER,
                 },
             )
 

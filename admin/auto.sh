@@ -117,7 +117,6 @@ validate_env() {
         "CF_Token"
         "CF_Zone_ID"
         "FP_APP_TOKEN_PASS"
-        "FP_PROXY_SERVER_OWNER"
         "OPENROUTER_KEY"
     )
     
